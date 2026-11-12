@@ -6,6 +6,7 @@ import time
 import uuid
 import warnings
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -16,11 +17,13 @@ from loguru import logger
 
 from nanobot.agent.hook import AgentHook, AgentHookContext
 from nanobot.agent.hooks import create_file_edit_activity_hook
+from nanobot.agent.project_instructions import load_project_instructions
 from nanobot.agent.runner import AgentRunner, AgentRunSpec
 from nanobot.agent.session_activity import SessionActivity
+from nanobot.agent.subagent_project import prepare_project_worktree, reclaim_project_worktrees
 from nanobot.agent.subagent_sessions import SubagentSessions
+from nanobot.agent.subagent_status import SubagentSessionError, SubagentStatus
 from nanobot.agent.subagent_status import SubagentState as SubagentState
-from nanobot.agent.subagent_status import SubagentStatus
 from nanobot.agent.tools.base import Tool, ToolResult
 from nanobot.agent.tools.context import (
     RequestContext,
@@ -32,6 +35,7 @@ from nanobot.agent.tools.exec_session import ExecSessionManager
 from nanobot.agent.tools.file_state import FileStates
 from nanobot.agent.tools.loader import ToolLoader
 from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.agent.tools.subagent_config import SubagentProjectConfig
 from nanobot.agent.turn_hooks import AgentTurnHookSpec, build_agent_turn_hook
 from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
@@ -45,6 +49,8 @@ from nanobot.providers.base import LLMProvider, ToolCallRequest
 from nanobot.security.workspace_access import (
     WorkspaceScope,
     bind_workspace_scope,
+    build_workspace_scope,
+    default_access_mode,
     reset_workspace_scope,
     workspace_sandbox_status,
 )
@@ -97,6 +103,8 @@ class _SubagentTask:
     origin: _SubagentOrigin
     origin_message_id: str | None = None
     workspace_scope: WorkspaceScope | None = None
+    project_config: SubagentProjectConfig | None = None
+    resume_project: bool = False
     announce: bool = True
     begun: bool = False
     suppress_notice: bool = False
@@ -151,6 +159,13 @@ class _SubagentTask:
 
     def snapshot(self) -> SubagentStatus:
         return deepcopy(self.status)
+
+    def cleanup_succeeded(self) -> bool:
+        cleanup = self.cleanup_task
+        return (
+            cleanup is not None and cleanup.done()
+            and not cleanup.cancelled() and cleanup.exception() is None
+        )
 
 
 class _SubagentHook(AgentHook):
@@ -277,6 +292,10 @@ class SubagentManager:
         self._closed = False
         self._close_task: asyncio.Task[int] | None = None
         self._admitting = 0
+        self._admitting_worktrees: set[str] = set()
+        self._worktree_lock = asyncio.Lock()
+        self._worktree_sweep_needed = asyncio.Event()
+        self._worktree_sweeper: asyncio.Task[None] | None = None
         self.sessions = SubagentSessions(session_manager) if session_manager is not None else None
 
     MAX_ACTIVE = 128
@@ -308,6 +327,34 @@ class SubagentManager:
         """Recover observations only after the host has claimed execution ownership."""
         if self.sessions is not None:
             await self.sessions.interrupt_pending()
+            if self.tools_config.subagent.projects and self._worktree_sweeper is None:
+                self._worktree_sweeper = asyncio.create_task(self._maintain_project_worktrees())
+
+    def _worktree_in_use(self, worktree_id: str) -> bool:
+        return worktree_id in self._admitting_worktrees or any(
+            record.status.worktree_id == worktree_id
+            and (record.status.finished_at is None or not record.cleanup_succeeded())
+            for record in self._tasks.values()
+        )
+
+    async def _maintain_project_worktrees(self) -> None:
+        assert self.sessions is not None
+        projects = self.tools_config.subagent.projects
+        owners = {config.feishu_session for config in projects.values()}
+        while True:
+            self._worktree_sweep_needed.clear()
+            try:
+                async with self._worktree_lock:
+                    statuses = [status for owner in owners for status in self.sessions.load(owner).values()]
+                    await reclaim_project_worktrees(
+                        projects, self.workspace, statuses, self._worktree_in_use, now=time.time(),
+                    )
+            except (OSError, RuntimeError, SubagentSessionError):
+                logger.exception("Project worktree retention check failed")
+            try:
+                await asyncio.wait_for(self._worktree_sweep_needed.wait(), timeout=3600)
+            except TimeoutError:
+                pass
 
     def _start_cleanup(self, record: _SubagentTask, *, retry: bool = False) -> asyncio.Task[int]:
         cleanup = record.cleanup_task
@@ -323,11 +370,9 @@ class SubagentManager:
             self._release_task(record)
 
     def _release_task(self, record: _SubagentTask) -> None:
-        cleanup = record.cleanup_task
         if (record.status.finished_at is not None
                 and record.status.task_id not in self._running_tasks
-                and cleanup is not None and cleanup.done()
-                and not cleanup.cancelled() and cleanup.exception() is None):
+                and record.cleanup_succeeded()):
             self._tasks.pop(record.status.task_id, None)
 
     async def _finish(self, record: _SubagentTask,
@@ -362,6 +407,12 @@ class SubagentManager:
         if not owner or status is None or status.owner != owner:
             raise SubagentControlError("task unavailable")
         return status
+
+    def is_execution_live(self, task_id: str, owner: str) -> bool:
+        """Owner-scoped execution authority, not a persisted activity claim."""
+        status = self._owned_status(task_id, owner)
+        task = self._running_tasks.get(task_id)
+        return status.state in {"queued", "running"} and task is not None and not task.done()
 
     def check(self, task_id: str, owner: str | None) -> SubagentStatus:
         """Return detached status for one task owned by the caller's session."""
@@ -541,6 +592,7 @@ class SubagentManager:
         temperature: float | None, workspace_scope: WorkspaceScope | None,
         runtime: LLMRuntime | None, *, announce: bool, origin_turn_id: str | None,
         session_policy: SessionPolicy | None,
+        project: str | None = None, resume_task_id: str | None = None,
     ) -> _SubagentTask:
         self.bus.admission.check()
         if runtime is None:
@@ -552,6 +604,29 @@ class SubagentManager:
             raise SubagentControlError("subagent manager is closed or at task capacity")
         owner = session_key or f"{origin_channel}:{origin_chat_id}"
         task_id = str(uuid.uuid4())
+        project_config = None
+        worktree_id = None
+        if project is not None:
+            project_config = self.tools_config.subagent.projects.get(project)
+            if (
+                project_config is None or project_config.feishu_session != owner
+                or owner != f"{origin_channel}:{origin_chat_id}"
+                or not announce or self.sessions is None
+                or (session_policy is not None and not session_policy.persist)
+            ):
+                raise SubagentControlError("project is unavailable in this conversation")
+            worktree_id = task_id
+            if resume_task_id is not None:
+                previous = self._owned_status(resume_task_id, owner)
+                if (
+                    previous.project != project or previous.worktree_id is None
+                    or previous.worktree is None or previous.finished_at is None
+                ):
+                    raise SubagentControlError("a finished project task with a prepared worktree is required")
+                worktree_id = previous.worktree_id
+            if self._worktree_in_use(worktree_id):
+                raise SubagentControlError("the project worktree already has a task in progress")
+            self._admitting_worktrees.add(worktree_id)
         status = SubagentStatus(
             task_id=task_id,
             revision=1,
@@ -561,6 +636,8 @@ class SubagentManager:
             owner=owner,
             origin_message_id=origin_message_id,
             origin_turn_id=origin_turn_id,
+            project=project,
+            worktree_id=worktree_id,
         )
         self._admitting += 1
         try:
@@ -580,6 +657,8 @@ class SubagentManager:
                 child.add_message("user", task)
         finally:
             self._admitting -= 1
+            if worktree_id is not None:
+                self._admitting_worktrees.discard(worktree_id)
         if self._closed:
             if self.sessions is not None:
                 await self.sessions.sessions.state.delete(child.key, expected_generation=child.generation)
@@ -594,6 +673,8 @@ class SubagentManager:
             },
             origin_message_id=origin_message_id,
             workspace_scope=workspace_scope,
+            project_config=project_config,
+            resume_project=resume_task_id is not None,
             announce=announce,
         )
         self._tasks[task_id] = record
@@ -620,17 +701,22 @@ class SubagentManager:
         runtime: LLMRuntime | None = None,
         origin_turn_id: str | None = None,
         session_policy: SessionPolicy | None = None,
+        project: str | None = None,
+        resume_task_id: str | None = None,
     ) -> str:
         """Start background work and route its terminal result to the parent."""
         try:
             record = await self._create_task(
                 task, label, origin_channel, origin_chat_id, session_key,
                 origin_message_id, temperature, workspace_scope, runtime, announce=True, origin_turn_id=origin_turn_id,
-                session_policy=session_policy,
+                session_policy=session_policy, project=project, resume_task_id=resume_task_id,
             )
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
         status = record.status
+        if status.project is not None:
+            return (f"Subagent [{status.label}] queued (id: {status.task_id}). "
+                    "The worktree will be prepared when it runs. I'll notify you when it completes.")
         return (f"Subagent [{status.label}] started (id: {status.task_id}). "
                 "I'll notify you when it completes. Don't duplicate its work.")
 
@@ -695,6 +781,8 @@ class SubagentManager:
             self._running_tasks[record.status.task_id] = settlement
             settlement.add_done_callback(partial(self._task_done, record))
         self._release_task(record)
+        if record.status.state == "done" and record.status.worktree is not None:
+            self._worktree_sweep_needed.set()
 
     async def _save_transcript(self, record: _SubagentTask) -> None:
         if self.sessions is not None:
@@ -719,8 +807,30 @@ class SubagentManager:
             async with self._run_slots:
                 record.raise_if_stopping()
                 status.state = "running"
-                status.phase = "initializing"
+                status.phase = "preparing_worktree" if record.project_config is not None else "initializing"
                 await self._save_status(status)
+                record.raise_if_stopping()
+                if record.project_config is not None:
+                    assert status.worktree_id is not None
+                    # A new checkout has no retained task history. A resumed checkout
+                    # shares its path with the retention scan until preparation ends.
+                    async with self._worktree_lock if record.resume_project else nullcontext():
+                        worktree = await prepare_project_worktree(
+                            record.project_config, self.workspace, status.worktree_id,
+                            resume=record.resume_project,
+                        )
+                    record.raise_if_stopping()
+                    parent_scope = record.workspace_scope
+                    record.workspace_scope = build_workspace_scope(
+                        worktree.path,
+                        parent_scope.access_mode if parent_scope else default_access_mode(self.restrict_to_workspace),
+                        source_channel=parent_scope.source_channel if parent_scope else None,
+                    )
+                    status.worktree = str(worktree.path)
+                    status.branch = worktree.branch
+                    status.phase = "worktree_ready"
+                    await self._save_status(status)
+                    record.raise_if_stopping()
                 outcome = await self._run_admitted_subagent(record)
                 record.decide(outcome)
         except asyncio.CancelledError:
@@ -743,6 +853,7 @@ class SubagentManager:
                 "ok" if outcome.state == "done" else outcome.state, record.origin_message_id,
                 receipts=dict(status.receipts),
                 stop_reason=status.stop_reason, error=status.error, partial_result=status.partial,
+                project_status=status if status.project is not None else None,
             )
         if outcome.state == "cancelled":
             raise asyncio.CancelledError
@@ -770,7 +881,7 @@ class SubagentManager:
             cfg.restrict_to_workspace = workspace_scope.restrict_to_workspace
         # Construct from the agent workspace; the bound scope below supplies the project cwd.
         tools = self._build_tools(tools_config=cfg, exec_manager=record.exec_manager)
-        system_prompt = self._build_subagent_prompt(workspace=root)
+        system_prompt = self._build_subagent_prompt(workspace=root, project=status.project is not None)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             *record.session.get_history(),
@@ -812,6 +923,8 @@ class SubagentManager:
             message_id=origin_message_id,
             session_key=record.session.key,
             runtime=runtime,
+            workspace=root,
+            workspace_scope=workspace_scope,
             log_content=record.session.policy.log_content,
             persist_session=record.session.policy.persist,
         ))
@@ -890,6 +1003,7 @@ class SubagentManager:
         stop_reason: str | None = None,
         error: str | None = None,
         partial_result: bool = False,
+        project_status: SubagentStatus | None = None,
     ) -> None:
         status_text = {
             "ok": "completed successfully", "cancelled": "was cancelled",
@@ -905,6 +1019,9 @@ class SubagentManager:
             stop_reason=stop_reason,
             error=error,
             partial_result=partial_result,
+            project=project_status.project if project_status else None,
+            worktree=project_status.worktree if project_status else None,
+            branch=project_status.branch if project_status else None,
         )
 
         # Inject as system message to trigger main agent.
@@ -942,7 +1059,7 @@ class SubagentManager:
         await self.bus.publish_inbound(msg)
         logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin['channel'], origin['chat_id'])
 
-    def _build_subagent_prompt(self, workspace: Path | None = None) -> str:
+    def _build_subagent_prompt(self, workspace: Path | None = None, *, project: bool = False) -> str:
         from nanobot.agent.skills import SkillsLoader
 
         agent_workspace = self.workspace.expanduser().resolve()
@@ -962,6 +1079,8 @@ class SubagentManager:
             agent_workspace=str(agent_workspace),
             history_log=history_log,
             skills_summary=skills_summary or "",
+            project=project,
+            project_instructions=load_project_instructions(project_workspace) if project else "",
         )
 
     async def cancel_by_session(self, session_key: str) -> int:
@@ -978,6 +1097,9 @@ class SubagentManager:
     async def close(self) -> None:
         """Request cancellation and bounded cleanup, retaining unfinished work."""
         self._closed = True
+        if self._worktree_sweeper is not None:
+            self._worktree_sweeper.cancel()
+            await asyncio.gather(self._worktree_sweeper, return_exceptions=True)
         await asyncio.gather(*(self._cancel_task(self._tasks[tid], suppress_notice=True)
                                for tid in list(self._running_tasks)))
         cleanups: set[asyncio.Task[int]] = set()

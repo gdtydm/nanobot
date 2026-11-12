@@ -45,7 +45,7 @@ The configured workspace is the **agent workspace**. A WebUI chat can also selec
 
 | Resource | Owner when a project is selected |
 |---|---|
-| Project instructions | `AGENTS.md` from the selected project; there is no fallback to the agent workspace's `AGENTS.md` |
+| Project instructions | A nonempty root `AGENTS.override.md`, otherwise root `AGENTS.md`, from the selected project |
 | Agent profile | `SOUL.md` and `USER.md` from the agent workspace; project-local files with those names are ignored |
 | Memory and custom skills | `memory/` and `skills/` from the agent workspace |
 | Relative file paths and shell working directory | The selected project workspace |
@@ -173,6 +173,12 @@ Use `/stop` to stop the current session and its subagents. Other sessions are un
 Subagents belong to their original conversation. They do not appear as separate topics or in general conversation searches. Deleting the conversation stops its subagents and removes their saved history; forking it does not copy them.
 
 Saved task history and results remain available after a gateway restart. Unfinished tasks are marked interrupted, with saved partial results when available. Nanobot does not automatically resume them or resend completion notifications; ask it to start a new task to continue the work.
+
+Gateway operators can configure project worktrees for a specific Feishu private conversation under `tools.subagent.projects`. Each entry names a local repository, a trusted worktree preparation script, and the exact `feishuSession` (such as `feishu:ou_…`). A project subagent uses its worktree as the default directory and inherits the parent agent's workspace access mode and shell settings. It sends milestones and a quiet reminder through the originating conversation. A follow-up run can reuse the worktree of a finished task with `resume_task_id`.
+
+The gateway checks retention at startup, after successful project tasks, and hourly. Across configured projects, it keeps up to 10 clean worktrees for successful tasks and expires them seven days after their latest completion. Running and interrupted tasks, worktrees with uncommitted changes, and worktrees with local outputs (including Git-ignored outputs) stay outside that limit. Older worktrees with local files and no saved setup snapshot are also kept.
+
+Reclaiming a checkout preserves its local branch, commits, and task history. To continue in Feishu, ask nanobot to resume the original task using its task ID. The `subagent` tool uses `resume_task_id` to reopen the checkout at the tip of the original branch and restore the setup files saved when it was created.
 
 See [Delegated work in the WebUI](./webui.md#delegated-work) for progress and task details. WebUI temporary chats do not support subagents. SDK calls with `ephemeral=True` wait for delegated results without saving the temporary conversation or its subagent history.
 

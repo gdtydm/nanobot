@@ -13,6 +13,7 @@ from nanobot.agent.tools.filesystem_config import FileToolsConfig
 from nanobot.agent.tools.image_generation_config import ImageGenerationToolConfig
 from nanobot.agent.tools.self_config import MyToolConfig
 from nanobot.agent.tools.shell_config import ExecToolConfig
+from nanobot.agent.tools.subagent_config import SubagentToolConfig
 from nanobot.agent.tools.web_config import (
     WebFetchConfig as WebFetchConfig,
 )
@@ -416,6 +417,7 @@ class ToolsConfig(Base):
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     file: FileToolsConfig = Field(default_factory=FileToolsConfig)
+    subagent: SubagentToolConfig = Field(default_factory=SubagentToolConfig)
     cli_apps: CliAppsToolConfig = Field(default_factory=CliAppsToolConfig)
     my: MyToolConfig = Field(default_factory=MyToolConfig)
     image_generation: ImageGenerationToolConfig = Field(

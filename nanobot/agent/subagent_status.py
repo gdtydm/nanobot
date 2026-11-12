@@ -39,6 +39,10 @@ class SubagentStatus:
     created_at: float = field(default_factory=time.time)
     completed_at: float | None = None
     revision: int = 0
+    project: str | None = None
+    worktree_id: str | None = None
+    worktree: str | None = None
+    branch: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         """Serialize task observations without exposing ownership or resources."""
@@ -63,4 +67,7 @@ class SubagentStatus:
             "partial": self.partial,
             "stop_reason": self.stop_reason,
             "error": self.error,
+            "project": self.project,
+            "worktree": self.worktree,
+            "branch": self.branch,
         }

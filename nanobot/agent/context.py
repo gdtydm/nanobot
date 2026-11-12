@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
 from nanobot.agent.memory import MemoryStore
+from nanobot.agent.project_instructions import load_project_instructions
 from nanobot.agent.skills import SkillsLoader
 from nanobot.agent.tools import mcp as mcp_tools
 from nanobot.agent.tools import sessions as session_tools
@@ -70,7 +71,6 @@ class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md"]
-    _SKIPPABLE_DEFAULTS = {"AGENTS.md", "USER.md"}
 
     def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None):
         self.workspace = workspace
@@ -176,16 +176,11 @@ class ContextBuilder:
         return _to_blocks(left) + _to_blocks(right)
 
     def _load_bootstrap_files(self, workspace: Path | None = None) -> str:
-        parts: list[str] = []
-        project_root = workspace or self.workspace
-        sources = [
-            ("AGENTS.md", project_root),
-            ("SOUL.md", self.workspace),
-            ("USER.md", self.workspace),
-        ]
+        project_instructions = load_project_instructions(workspace or self.workspace)
+        parts = [project_instructions] if project_instructions else []
 
-        for filename, root in sources:
-            file_path = root / filename
+        for filename in ("SOUL.md", "USER.md"):
+            file_path = self.workspace / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
                 if filename == "SOUL.md" and self._is_template_content(
@@ -196,9 +191,7 @@ class ContextBuilder:
                 if not content.strip():
                     record_source(file_path, "", loaded=False)
                     continue
-                if filename in self._SKIPPABLE_DEFAULTS and self._is_template_content(
-                    content, filename
-                ):
+                if filename == "USER.md" and self._is_template_content(content, filename):
                     record_source(file_path, "", loaded=False)
                     continue
                 parts.append(f"## {filename}\n\n{content}")

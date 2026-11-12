@@ -46,6 +46,7 @@ _TOOL_CONFIG_MODULES = (
     "nanobot.agent.tools.image_generation_config",
     "nanobot.agent.tools.self_config",
     "nanobot.agent.tools.shell_config",
+    "nanobot.agent.tools.subagent_config",
     "nanobot.agent.tools.web_config",
 )
 

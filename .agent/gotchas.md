@@ -25,7 +25,7 @@ nanobot explicitly supports Windows. Key differences to keep in mind:
 
 Agent system prompts and scenario-specific instructions live in `nanobot/templates/`, including `agent/identity.md` and `agent/platform_policy.md`; workspace defaults include `AGENTS.md`, `HEARTBEAT.md`, and `SOUL.md`. Prompt rendering is handled by `nanobot/utils/prompt_templates.py`. Changing these files alters agent behavior as directly as changing Python code.
 
-The repository's root `AGENTS.md` guides coding agents; `nanobot/templates/AGENTS.md` is a default for nanobot workspaces. `nanobot/agent/context.py` loads project `AGENTS.md` and global `SOUL.md`/`USER.md`, skipping unchanged bundled `AGENTS.md` and `USER.md` defaults. It does not implement Codex's ancestor-directory instruction chain.
+The repository's root `AGENTS.md` guides coding agents; `nanobot/templates/AGENTS.md` is a default for nanobot workspaces. The main prompt and configured project subagents load one rule file from the project root, preferring a nonempty `AGENTS.override.md` over `AGENTS.md`. The main prompt also loads the agent workspace's `SOUL.md` and `USER.md`. Unchanged bundled `AGENTS.md` and `USER.md` defaults are skipped. Subdirectory rules are read as needed by the agent.
 
 Tool descriptions, skills, and replayed session history also shape model behavior. Treat changes to those surfaces like runtime code: keep them focused, verify the affected contract, and avoid teaching the model to repeat internal markers, local paths, or tool-call text. Add a regression test when it proves a reachable failure that existing coverage does not address.
 

@@ -59,6 +59,18 @@ class TestMergeMessageContent:
 
 
 class TestLoadBootstrapFiles:
+    @pytest.mark.parametrize("override", ["personal project rules", " \n", None])
+    def test_project_rule_precedence_in_system_prompt(self, tmp_path, override):
+        (tmp_path / "AGENTS.md").write_text("shared project rules", encoding="utf-8")
+        if override is not None:
+            (tmp_path / "AGENTS.override.md").write_text(override, encoding="utf-8")
+        prompt = _builder(tmp_path).build_system_prompt()
+        if override and override.strip():
+            assert prompt.count(override) == 1
+            assert "shared project rules" not in prompt
+        else:
+            assert prompt.count("shared project rules") == 1
+
     def test_no_bootstrap_files(self, tmp_path):
         builder = _builder(tmp_path)
         assert builder._load_bootstrap_files() == ""

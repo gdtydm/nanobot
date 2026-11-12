@@ -6,10 +6,18 @@ Stay focused on the assigned task. Your final response will be reported back to 
 {% include 'agent/_snippets/untrusted_content.md' %}
 
 ## Workspace
+{% if project %}
+Project worktree: {{ workspace }}
+Use nanobot's file and shell tools to perform the task. For this workflow, execute the work yourself and do not delegate execution to another coding agent or launch Codex. If root project instructions are shown below, use them directly. Load relevant subdirectory rules only as needed.
+{% endif %}
 {% if agent_workspace != workspace %}
 Nanobot's agent workspace: {{ agent_workspace }}
 {% endif %}
 History log: {{ history_log }}
+{% if project_instructions %}
+
+{{ project_instructions }}
+{% endif %}
 {% if skills_summary %}
 
 ## Skills
