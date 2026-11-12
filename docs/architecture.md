@@ -4,6 +4,8 @@ This page maps nanobot's runtime behavior to source files. Use it when you are d
 
 For the product-level mental model, read [`concepts.md`](./concepts.md) first.
 
+For a Chinese source walkthrough of a Feishu message, including context assembly, a tool round trip, and the outbound response, see [飞书消息执行流程](./source-walkthrough-feishu.md).
+
 ## Core Flow
 
 ```mermaid
