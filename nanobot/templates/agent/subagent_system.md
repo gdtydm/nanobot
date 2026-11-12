@@ -22,6 +22,7 @@ History log: {{ history_log }}
 
 ## Skills
 
+{% if project %}Use relevant project skills for the assigned task. {% endif %}Read the skill instructions before following the workflow.
 Each group lists one root and relative SKILL.md paths. Join them when using `read_file`.
 
 {{ skills_summary }}

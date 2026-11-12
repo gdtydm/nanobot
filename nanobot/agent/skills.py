@@ -23,8 +23,16 @@ from nanobot.agent.skill_metadata import (
 )
 from nanobot.context_sources import record_source
 from nanobot.runtime_context import RuntimeContextBlock
+from nanobot.security.workspace_policy import is_path_within
 
 _SKILL_REFERENCE = re.compile(r"(?<![\w$])\$([A-Za-z0-9_-]+)")
+
+
+def project_skill_root(project: Path) -> Path | None:
+    """Find the project's local skill directory without following it outside the project."""
+    project = project.expanduser().resolve()
+    root = project / ".agents" / "skills"
+    return root if root.is_dir() and root.resolve() == root else None
 
 
 @dataclass
@@ -44,11 +52,19 @@ class SkillsLoader:
     specific tools or perform certain tasks.
     """
 
-    def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None, disabled_skills: set[str] | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        builtin_skills_dir: Path | None = None,
+        disabled_skills: set[str] | None = None,
+        *,
+        project_skill_roots: tuple[Path, ...] = (),
+    ):
         self.workspace = workspace
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.disabled_skills = disabled_skills or set()
+        self.project_skill_roots = project_skill_roots
         self._snapshot: ContextVar[_SkillSnapshot | None] = ContextVar("skill_snapshot", default=None)
 
     @contextmanager
@@ -85,7 +101,7 @@ class SkillsLoader:
             if not skill_dir.is_dir():
                 continue
             skill_file = skill_dir / "SKILL.md"
-            if not skill_file.exists():
+            if not skill_file.is_file() or (source == "project" and not is_path_within(skill_file, base)):
                 continue
             name = skill_dir.name
             if skip_names is not None and name in skip_names:
@@ -127,8 +143,15 @@ class SkillsLoader:
             for legacy, canonical in self._skill_aliases().items():
                 if legacy in disabled or canonical in disabled:
                     disabled.update((legacy, canonical))
-        skills = self._skill_entries_from_dir(self.workspace_skills, "workspace")
-        seen_names = {entry["name"] for entry in skills}
+        skills: list[dict[str, str]] = []
+        seen_names: set[str] = set()
+        for root, source in (
+            *((root, "project") for root in self.project_skill_roots),
+            (self.workspace_skills, "workspace"),
+        ):
+            entries = self._skill_entries_from_dir(root, source, skip_names=seen_names)
+            skills.extend(entries)
+            seen_names.update(entry["name"] for entry in entries)
         snapshot = self._snapshot.get()
         for skill in plugin_skills:
             if skill.name in seen_names:
@@ -280,6 +303,7 @@ class SkillsLoader:
         use_relative_roots = project_workspace == agent_workspace
         sections: list[str] = []
         groups = (
+            *(("Project skills", "project", root) for root in self.project_skill_roots),
             ("Workspace skills", "workspace", self.workspace_skills),
             ("Agent Plugin skills", "plugin", self.workspace / "plugins"),
             ("Built-in skills", "builtin", self.builtin_skills),
@@ -289,6 +313,7 @@ class SkillsLoader:
                 entry
                 for entry in all_skills
                 if entry["source"] == source and (not exclude or entry["name"] not in exclude)
+                and Path(entry["path"]).is_relative_to(root)
             ]
             if not entries:
                 continue
@@ -296,7 +321,7 @@ class SkillsLoader:
             resolved_root = root.expanduser().resolve()
             # Directory tools need the real built-in root; only read_file resolves
             # workspace-relative skills/<name>/... aliases to bundled resources.
-            if use_relative_roots and source != "builtin":
+            if use_relative_roots and source in ("workspace", "plugin"):
                 display_root = Path("plugins" if source == "plugin" else "skills")
             else:
                 display_root = resolved_root

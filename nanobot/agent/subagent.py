@@ -20,6 +20,7 @@ from nanobot.agent.hooks import create_file_edit_activity_hook
 from nanobot.agent.project_instructions import load_project_instructions
 from nanobot.agent.runner import AgentRunner, AgentRunSpec
 from nanobot.agent.session_activity import SessionActivity
+from nanobot.agent.skills import SkillsLoader, project_skill_root
 from nanobot.agent.subagent_project import prepare_project_worktree, reclaim_project_worktrees
 from nanobot.agent.subagent_sessions import SubagentSessions
 from nanobot.agent.subagent_status import SubagentSessionError, SubagentStatus
@@ -568,16 +569,23 @@ class SubagentManager:
         workspace: Path | None = None,
         tools_config: ToolsConfig | None = None,
         exec_manager: ExecSessionManager | None = None,
+        repository_skill_roots: tuple[Path, ...] = (),
     ) -> ToolRegistry:
         root = self.workspace if workspace is None else workspace
         registry = ToolRegistry()
         cfg = tools_config if tools_config is not None else self._subagent_tools_config()
+        if cfg.exec.sandbox and repository_skill_roots:
+            exec_config = cfg.exec.model_copy(update={
+                "sandbox_ro_binds": [*cfg.exec.sandbox_ro_binds, *(str(path) for path in repository_skill_roots)],
+            })
+            cfg = cfg.model_copy(update={"exec": exec_config})
         ctx = ToolContext(
             config=cfg,
             network=self.network_config,
             workspace=str(root.resolve()),
             exec_session_manager=exec_manager or self._exec_session_manager,
             file_state_store=FileStates(),
+            repository_skill_roots=repository_skill_roots,
             workspace_sandbox=workspace_sandbox_status(
                 restrict_to_workspace=cfg.restrict_to_workspace,
                 workspace=root,
@@ -879,9 +887,23 @@ class SubagentManager:
         if workspace_scope is not None:
             cfg = self._subagent_tools_config()
             cfg.restrict_to_workspace = workspace_scope.restrict_to_workspace
+        project_skill_roots: tuple[Path, ...] = ()
+        repository_skill_roots: tuple[Path, ...] = ()
+        if record.project_config is not None:
+            worktree_skills = project_skill_root(root)
+            repository_skills = project_skill_root(record.project_config.repository)
+            project_skill_roots = tuple(dict.fromkeys(
+                path for path in (worktree_skills, repository_skills) if path is not None
+            ))
+            if repository_skills is not None and repository_skills != worktree_skills:
+                repository_skill_roots = (repository_skills,)
         # Construct from the agent workspace; the bound scope below supplies the project cwd.
-        tools = self._build_tools(tools_config=cfg, exec_manager=record.exec_manager)
-        system_prompt = self._build_subagent_prompt(workspace=root, project=status.project is not None)
+        tools = self._build_tools(
+            tools_config=cfg, exec_manager=record.exec_manager, repository_skill_roots=repository_skill_roots,
+        )
+        system_prompt = self._build_subagent_prompt(
+            workspace=root, project=status.project is not None, project_skill_roots=project_skill_roots,
+        )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             *record.session.get_history(),
@@ -1059,14 +1081,19 @@ class SubagentManager:
         await self.bus.publish_inbound(msg)
         logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin['channel'], origin['chat_id'])
 
-    def _build_subagent_prompt(self, workspace: Path | None = None, *, project: bool = False) -> str:
-        from nanobot.agent.skills import SkillsLoader
-
+    def _build_subagent_prompt(
+        self,
+        workspace: Path | None = None,
+        *,
+        project: bool = False,
+        project_skill_roots: tuple[Path, ...] = (),
+    ) -> str:
         agent_workspace = self.workspace.expanduser().resolve()
         project_workspace = workspace.expanduser().resolve() if workspace else agent_workspace
         skills_summary = SkillsLoader(
             self.workspace,
             disabled_skills=self.disabled_skills,
+            project_skill_roots=project_skill_roots,
         ).build_skills_summary(workspace=project_workspace)
         history_log = (
             str(agent_workspace / "memory" / "history.jsonl")

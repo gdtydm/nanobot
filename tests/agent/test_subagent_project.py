@@ -53,8 +53,19 @@ async def test_feishu_project_tasks_use_distinct_worktrees_and_resume_their_own(
 
     git("init")
     (repo / "AGENTS.md").write_text("BASE_RULE_MARKER")
-    git("add", "AGENTS.md")
+    tracked_skill = repo / ".agents/skills/quality-check/SKILL.md"
+    tracked_skill.parent.mkdir(parents=True)
+    tracked_skill.write_text("---\nname: quality-check\ndescription: Run checkout quality checks\n---\nBRANCH_SKILL")
+    git("add", "AGENTS.md", ".agents/skills/quality-check")
     git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial")
+    tracked_skill.write_text("---\nname: quality-check\ndescription: Local repository draft\n---\nDRAFT_SKILL")
+    local_skill = repo / ".agents/skills/analysis-flow"
+    local_skill.mkdir()
+    (local_skill / "SKILL.md").write_text(
+        "---\nname: analysis-flow\ndescription: Follow the project analysis workflow\n---\nANALYSIS_SKILL"
+    )
+    (local_skill / "guide.md").write_text("ANALYSIS_GUIDE")
+    (repo / "private-notes.md").write_text("REPOSITORY_NOTES")
     (workspace / "previous-report.txt").write_text("HOST_REPORT_MARKER")
     script = tmp_path / "new_worktree.py"
     script.write_text(
@@ -89,14 +100,24 @@ async def test_feishu_project_tasks_use_distinct_worktrees_and_resume_their_own(
         assert scope.project_path == spec.workspace
         assert prompt.count("PERSONAL_RULE_MARKER") == 1
         assert "BASE_RULE_MARKER" not in prompt
+        assert "Run checkout quality checks" in prompt
+        assert "Follow the project analysis workflow" in prompt
+        assert "Local repository draft" not in prompt
+        assert "BRANCH_SKILL" not in prompt and "ANALYSIS_SKILL" not in prompt
         write = spec.tools.get("write_file")
         assert write is not None
         await write.execute(path="worker.txt", content="edited")
         read = spec.tools.get("read_file")
         assert read is not None
+        assert "BRANCH_SKILL" in str(await read.execute(path=".agents/skills/quality-check/SKILL.md"))
+        assert "ANALYSIS_SKILL" in str(await read.execute(path=str(local_skill / "SKILL.md")))
+        assert "ANALYSIS_GUIDE" in str(await read.execute(path=str(local_skill / "guide.md")))
         report = await read.execute(path=str(workspace / "previous-report.txt"))
         if restricted:
             assert "outside" in str(report)
+            assert "outside" in str(await read.execute(path=str(repo / "private-notes.md")))
+            result = await write.execute(path=str(local_skill / "guide.md"), content="unauthorized edit")
+            assert "outside" in str(result)
         else:
             assert "HOST_REPORT_MARKER" in str(report)
         await ready.put(scope.project_path)
