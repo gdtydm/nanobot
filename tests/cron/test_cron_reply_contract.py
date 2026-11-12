@@ -6,6 +6,7 @@ import pytest
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.tools.context import RequestContext, current_request_context, request_context
 from nanobot.agent.tools.cron import CronTool
+from nanobot.bus.outbound_events import ProgressEvent, StreamDeltaEvent
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import Config
 from nanobot.cron.binding import CronBinding, binding_revision
@@ -30,6 +31,64 @@ async def test_bound_job_runs_with_its_saved_session_key(tmp_path):
     message = agent.submit_cron_turn.await_args.args[0]
     assert message.session_key == "unified:default"
     assert (message.channel, message.chat_id) == ("telegram", "old")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", ["waiting", "blank", "confirmed"])
+async def test_explicit_cron_delivery_only_sends_the_confirmed_notification(tmp_path, result):
+    workspace = tmp_path / "workspace"
+    sessions = SessionManager(workspace)
+    bus = MessageBus()
+    store_path = tmp_path / "cron" / "jobs.json"
+    cron = CronService(store_path)
+    job = cron.add_job(
+        "Check Stage2", CronSchedule(kind="every", every_ms=1_200_000),
+        "Send a notification only after the Stage3 backfill is confirmed.",
+        session_key="weixin:source", origin_channel="weixin", origin_chat_id="source",
+    )
+    cron.update_job(job.id, explicit_delivery=True)
+    cron = CronService(store_path)
+    job = cron.list_jobs()[0]
+    assert job.schedule.every_ms == 1_200_000
+    assert job.payload.explicit_delivery
+
+    provider = MagicMock(aclose=AsyncMock())
+    provider.get_default_model.return_value = "test-model"
+    provider.generation = GenerationSettings(max_tokens=100)
+    provider.can_resume_conversation_state.return_value = False
+    provider.estimate_prompt_tokens.return_value = (100, "test")
+    requests = []
+
+    async def reply(**kwargs):
+        requests.append(kwargs)
+        if len(requests) == 1:
+            if result == "confirmed":
+                return LLMResponse(content="Finishing the check.", tool_calls=[ToolCallRequest(
+                    id="notify", name="message", arguments={"content": "Stage3 backfill confirmed"},
+                )], finish_reason="tool_calls")
+            return LLMResponse(content="Checking Stage2.", tool_calls=[ToolCallRequest(
+                id="check", name="list_dir", arguments={"path": str(workspace)},
+            )], finish_reason="tool_calls")
+        return LLMResponse(content=None if result == "blank" else "Internal check result")
+
+    provider.chat_stream_with_retry = reply
+    agent = AgentLoop(bus=bus, provider=provider, workspace=workspace, model="test-model",
+                      session_manager=sessions, tools_config=Config().tools, cron_service=cron)
+    try:
+        await run_bound_cron_job(job, agent=agent, cron=cron)
+        assert len(requests) >= 2
+        assert "notification condition is satisfied" in requests[0]["messages"][-1]["content"]
+        outbound = []
+        while bus.outbound_size:
+            message = await bus.consume_outbound()
+            assert not isinstance(message.event, (ProgressEvent, StreamDeltaEvent))
+            if message.event is None and message.content:
+                outbound.append((message.channel, message.chat_id, message.content))
+        assert outbound == (
+            [("weixin", "source", "Stage3 backfill confirmed")] if result == "confirmed" else []
+        )
+    finally:
+        await agent.aclose()
 
 
 @pytest.mark.asyncio

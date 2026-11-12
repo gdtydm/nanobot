@@ -4,12 +4,18 @@ import asyncio
 import hashlib
 import time
 import uuid
+from dataclasses import replace
 from typing import Any, Protocol
 
 from nanobot.bus.delivery import DELIVERY_RUN_META
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.cron.session_delivery import origin_delivery_context
-from nanobot.cron.session_turns import CRON_DEFER_UNTIL_IDLE_META, CRON_TRIGGER_META
+from nanobot.cron.session_turns import (
+    CRON_DEFER_UNTIL_IDLE_META,
+    CRON_EXPLICIT_DELIVERY_FIELD,
+    CRON_TRIGGER_META,
+)
+from nanobot.cron.task_gate import task_snapshot_message
 from nanobot.cron.types import CronJob, CronRunResult
 from nanobot.cron.webui_metadata import cron_proactive_delivery_metadata
 from nanobot.utils.prompt_templates import render_template
@@ -21,6 +27,9 @@ class BoundCronAgent(Protocol):
 
 
 class CronRunRecorder(Protocol):
+    def task_gate_snapshot(self, job: CronJob) -> dict[str, Any] | None:
+        ...
+
     def write_run_record(self, run_id: str, record: dict[str, Any]) -> None:
         ...
 
@@ -70,10 +79,16 @@ async def run_bound_cron_job(
     if not session_key:
         raise ValueError(f"cron job {job.id} is missing payload.session_key")
 
+    # The service normally gates first. Re-check at the runner boundary as
+    # well, so direct runner callers cannot enqueue a gated job unchecked.
+    if job.payload.task_gate is not None:
+        job = replace(job, task_snapshot=cron.task_gate_snapshot(job))
+    message = task_snapshot_message(job)
     prompt = render_template(
         "agent/cron_reminder.md",
         strip=True,
-        message=job.payload.message,
+        message=message,
+        explicit_delivery=job.payload.explicit_delivery,
     )
     prompt_ref = _cron_prompt_ref(prompt)
     run_id = f"{job.id}:{int(time.time() * 1000)}:{uuid.uuid4().hex[:8]}"
@@ -87,6 +102,7 @@ async def run_bound_cron_job(
         "job_name": job.name,
         "run_id": run_id,
         "prompt_ref": prompt_ref,
+        CRON_EXPLICIT_DELIVERY_FIELD: job.payload.explicit_delivery,
         "persist_content": (
             f"Scheduled cron job triggered: {job.name}\n\n{job.payload.message}"
         ),
@@ -98,7 +114,7 @@ async def run_bound_cron_job(
         "job_name": job.name,
         "session_key": session_key,
         "prompt_ref": prompt_ref,
-        "prompt_vars": {"message": job.payload.message},
+        "prompt_vars": {"message": message, "explicit_delivery": job.payload.explicit_delivery},
         "rendered_prompt": prompt,
     }
 

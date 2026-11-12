@@ -765,6 +765,23 @@ def _run_claimed_gateway(
         )
         raise CronJobSkippedError(reason)
 
+    # Only live, parent-owned subagents can renew a linked task's activity.
+    # SubagentManager already persists terminal outcomes and interrupts orphaned
+    # observations on startup; never treat an old disk 'running' as execution.
+    from nanobot.cron.task_gate import TaskExecution
+
+    def _task_execution(task_id: str, owner: str) -> TaskExecution | None:
+        from nanobot.agent.subagent import SubagentControlError
+        from nanobot.agent.subagent_status import SubagentSessionError
+
+        try:
+            status = agent.subagents.check(task_id, owner)
+        except (SubagentControlError, SubagentSessionError):
+            return None
+        live = agent.subagents.is_execution_live(task_id, owner)
+        return TaskExecution(state=status.state, live=live)
+
+    cron.task_execution_reader = _task_execution
     cron.on_job = on_cron_job
 
     def _webui_runtime_model_name() -> str | None:

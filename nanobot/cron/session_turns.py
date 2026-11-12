@@ -9,6 +9,7 @@ from nanobot.session.automation_spec import (
 )
 
 CRON_TRIGGER_META = "_cron_trigger"
+CRON_EXPLICIT_DELIVERY_FIELD = "explicit_delivery"
 CRON_DEFER_UNTIL_IDLE_META = "_cron_defer_until_session_idle"
 CRON_HISTORY_META = "_cron_turn"
 
@@ -43,6 +44,11 @@ def cron_trigger(metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
 
 def is_cron_turn(metadata: Mapping[str, Any] | None) -> bool:
     return cron_trigger(metadata) is not None
+
+
+def cron_uses_explicit_delivery(metadata: Mapping[str, Any] | None) -> bool:
+    trigger = cron_trigger(metadata)
+    return trigger is not None and trigger.get(CRON_EXPLICIT_DELIVERY_FIELD) is True
 
 
 def defer_cron_until_session_idle(metadata: Mapping[str, Any] | None) -> bool:

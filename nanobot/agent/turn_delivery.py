@@ -20,7 +20,9 @@ from nanobot.bus.outbound_events import (
 from nanobot.bus.queue import MessageBus
 from nanobot.bus.runtime_events import RuntimeEventPublisher
 from nanobot.channels.notification_routes import notification_metadata, system_reply_metadata
+from nanobot.cron.session_turns import cron_uses_explicit_delivery
 from nanobot.events import (
+    NO_EVENTS,
     AgentEvent,
     ContextCompactionEvent,
     EventSink,
@@ -210,6 +212,7 @@ class TurnDelivery:
     _stream_open: bool = field(init=False, default=False)
     events: EventSink = field(init=False)
     _routed_events: EventSink = field(init=False)
+    _automatic_delivery: bool = field(init=False)
     completed: bool = field(init=False, default=False)
     _stop_reason: str | None = field(init=False, default=None)
     _failure_error_kind: str | None = field(init=False, default=None)
@@ -225,7 +228,8 @@ class TurnDelivery:
         self.run_id = uuid4().hex
         input_id = input_history_metadata(self.input_message)["input_id"]
         self._response_input_ids = (input_id,) if input_id else None
-        self._routed_events = _bind_events(self.bus, self.route, self.session_key)
+        self._automatic_delivery = not cron_uses_explicit_delivery(self.input_message.metadata)
+        self._routed_events = self._bind_routed_events()
         self.events = EventSink(
             self._publish_event,
             lambda event_type: event_type is ResponseInputsEvent or self._routed_events.accepts(event_type),
@@ -239,8 +243,13 @@ class TurnDelivery:
         self.lifecycle_message = (
             self.delivery_message if self.route.publish_lifecycle else self.input_message
         )
-        if self.enable_stream and self.delivery_message.metadata.get("_wants_stream"):
+        if self._automatic_delivery and self.enable_stream and self.delivery_message.metadata.get("_wants_stream"):
             self._stream_base_id = f"{self.session_key}:{time.time_ns()}"
+
+    def _bind_routed_events(self) -> EventSink:
+        if not self._automatic_delivery:
+            return NO_EVENTS
+        return _bind_events(self.bus, self.route, self.session_key)
 
     @property
     def streaming(self) -> bool:
@@ -265,7 +274,7 @@ class TurnDelivery:
                 message.metadata[HISTORY_GENERATION_METADATA_KEY] = route.metadata[
                     HISTORY_GENERATION_METADATA_KEY
                 ]
-        self._routed_events = _bind_events(self.bus, self.route, self.session_key)
+        self._routed_events = self._bind_routed_events()
 
     def remember_session_route(self, session_metadata: dict[str, Any]) -> None:
         """Keep only routing fields needed to deliver a later idle notification."""
@@ -381,7 +390,7 @@ class TurnDelivery:
                 response = dataclasses.replace(response, metadata={
                     **response.metadata, "response_input_ids": list(self._response_input_ids),
                 })
-            if response.channel != "websocket" or stop_reason != "error":
+            if self._automatic_delivery and (response.channel != "websocket" or stop_reason != "error"):
                 delivery = DeliveryRequest.from_context(
                     self.input_message.metadata, self.session_key,
                     self.delivery_message.session_generation,
@@ -389,7 +398,7 @@ class TurnDelivery:
                 if delivery is not None:
                     response = dataclasses.replace(response, delivery=delivery)
                 await self.bus.publish_outbound(response)
-        elif self.lifecycle_message.channel == "cli":
+        elif self._automatic_delivery and self.lifecycle_message.channel == "cli":
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=self.lifecycle_message.channel,
@@ -417,14 +426,15 @@ class TurnDelivery:
         await self._publish_completion(outcome="cancelled")
 
     async def fail(self, *, publish_completion: bool) -> None:
-        await self.bus.publish_outbound(
-            OutboundMessage(
-                channel=self.lifecycle_message.channel,
-                chat_id=self.lifecycle_message.chat_id,
-                content="Sorry, I encountered an error.",
-                metadata=dict(self.lifecycle_message.metadata or {}),
+        if self._automatic_delivery:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=self.lifecycle_message.channel,
+                    chat_id=self.lifecycle_message.chat_id,
+                    content="Sorry, I encountered an error.",
+                    metadata=dict(self.lifecycle_message.metadata or {}),
+                )
             )
-        )
         if publish_completion:
             await self._publish_completion(outcome="failed", failure_kind="internal")
 

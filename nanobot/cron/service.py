@@ -15,6 +15,12 @@ from loguru import logger
 
 from nanobot.cron.binding import CronBinding, CronBindingError, binding_revision
 from nanobot.cron.session_turns import is_bound_cron_job
+from nanobot.cron.task_gate import (
+    CronJobSkippedError,
+    TaskExecutionReader,
+    TaskStatusGate,
+    evaluate_task_gate,
+)
 from nanobot.cron.types import (
     CronJob,
     CronJobState,
@@ -30,10 +36,6 @@ from nanobot.utils.helpers import atomic_write_text
 from nanobot.utils.run_records import (
     write_run_record as write_automation_run_record,
 )
-
-
-class CronJobSkippedError(Exception):
-    """Raised by cron callbacks when a job was intentionally skipped."""
 
 
 def _now_ms() -> int:
@@ -202,6 +204,7 @@ class CronService:
     ):
         self.admission = admission if admission is not None else RuntimeAdmission()
         self.store_path = store_path
+        self.task_execution_reader: TaskExecutionReader | None = None
         self._action_path = store_path.parent / "action.jsonl"
         self._run_records_dir = store_path.parent / "runs"
         self._lock = FileLock(str(self._action_path.parent) + ".lock")
@@ -421,6 +424,8 @@ class CronService:
                         "originChatId": j.payload.origin_chat_id,
                         "originMetadata": j.payload.origin_metadata,
                         "bindingVersion": j.payload.binding_version,
+                        "taskGate": j.payload.task_gate,
+                        "explicitDelivery": j.payload.explicit_delivery,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -590,6 +595,10 @@ class CronService:
             # single bad tick cannot silently stop all future jobs.
             self._arm_timer()
 
+    def task_gate_snapshot(self, job: CronJob) -> dict[str, Any] | None:
+        """Evaluate preflight without scheduling a turn or invoking callbacks."""
+        return evaluate_task_gate(job, self.store_path.parent.parent, self.task_execution_reader)
+
     async def _execute_job(self, job: CronJob) -> None:
         schedule = job.schedule
         start_ms = _now_ms()
@@ -597,8 +606,12 @@ class CronService:
         result: str | CronRunResult | None = None
 
         try:
+            # Before ANY callback, agent turn or session inbox admission. Only a
+            # detached execution copy carries observations; never mutate prompts.
+            snapshot = self.task_gate_snapshot(job)
+            execution_job = replace(job, task_snapshot=snapshot) if snapshot is not None else job
             if self.on_job:
-                result = await self.on_job(job)
+                result = await self.on_job(execution_job)
 
             job.state.last_status = "ok"
             job.state.last_error = None
@@ -653,6 +666,16 @@ class CronService:
         action: Literal["add", "del", "update"],
         params: dict[str, Any],
     ) -> None:
+        # Keep ordinary journal edits readable by an older live gateway during
+        # a staged upgrade. Runtime-only observations never belong in actions.
+        params = deepcopy(params)
+        params.pop("task_snapshot", None)
+        payload = params.get("payload")
+        if isinstance(payload, dict):
+            if payload.get("task_gate") is None:
+                payload.pop("task_gate", None)
+            if payload.get("explicit_delivery") is False:
+                payload.pop("explicit_delivery", None)
         self.store_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             with open(self._action_path, "a", encoding="utf-8") as f:
@@ -738,9 +761,13 @@ class CronService:
         origin_channel: str | None = None,
         origin_chat_id: str | None = None,
         origin_metadata: dict[str, Any] | None = None,
+        task_gate: dict[str, Any] | None = None,
+        explicit_delivery: bool = False,
     ) -> CronJob:
         """Add a new job."""
         _validate_schedule_for_add(schedule)
+        if task_gate is not None:
+            TaskStatusGate.from_dict(task_gate)
         now = _now_ms()
 
         job = CronJob(
@@ -759,6 +786,8 @@ class CronService:
                 origin_channel=origin_channel,
                 origin_chat_id=origin_chat_id,
                 origin_metadata=origin_metadata or {},
+                task_gate=deepcopy(task_gate),
+                explicit_delivery=explicit_delivery,
             ),
             state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
             created_at_ms=now,
@@ -866,6 +895,7 @@ class CronService:
         channel: str | None | EllipsisType = ...,
         to: str | None | EllipsisType = ...,
         delete_after_run: bool | None = None,
+        explicit_delivery: bool | None = None,
     ) -> CronJob | Literal["not_found", "protected"]:
         """Update mutable fields of an existing job. System jobs cannot be updated.
 
@@ -897,6 +927,8 @@ class CronService:
             job.payload.to = to
         if delete_after_run is not None:
             job.delete_after_run = delete_after_run
+        if explicit_delivery is not None:
+            job.payload.explicit_delivery = explicit_delivery
         _normalize_agent_turn_job(job)
         self._enforce_agent_binding(job)
 

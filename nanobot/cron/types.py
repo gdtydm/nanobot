@@ -59,6 +59,8 @@ class CronPayload:
     origin_chat_id: str | None = None
     origin_metadata: dict[str, Any] = field(default_factory=dict)
     binding_version: int = 0
+    task_gate: dict[str, Any] | None = None
+    explicit_delivery: bool = False
 
     @classmethod
     def from_store_dict(cls, data: dict[str, Any]) -> CronPayload:
@@ -78,6 +80,8 @@ class CronPayload:
                 get_camel_snake(data, "originMetadata", "origin_metadata", {}) or {}
             ),
             binding_version=_store_int(get_camel_snake(data, "bindingVersion", "binding_version", 0)),
+            task_gate=get_camel_snake(data, "taskGate", "task_gate"),
+            explicit_delivery=get_camel_snake(data, "explicitDelivery", "explicit_delivery") is True,
         )
 
 
@@ -158,6 +162,8 @@ class CronJob:
     created_at_ms: int = 0
     updated_at_ms: int = 0
     delete_after_run: bool = False
+    # Execution-only observation; never saved in jobs.json.
+    task_snapshot: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_dict(cls, kwargs: dict[str, Any]) -> CronJob:

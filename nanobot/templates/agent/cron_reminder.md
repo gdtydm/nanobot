@@ -1,3 +1,11 @@
+{% if explicit_delivery %}
+The scheduled time has arrived. Execute this scheduled cron job now.
+
+Rules:
+- Send a notification with the message tool only when the job's notification condition is satisfied. Omit the channel and chat ID to send to the saved chat.
+- Follow the job's instructions for handling incomplete checks and errors. Keep progress and routine results internal.
+- Finish with a short internal summary for the run record.
+{% else %}
 The scheduled time has arrived. Execute this scheduled cron job now and report the result to the user in the same session.
 
 Rules:
@@ -7,5 +15,6 @@ Rules:
 - Do not narrate internal progress.
 - Do not include user IDs.
 - Do not add status reports like "Done" or "Reminded" unless they are the natural response.
+{% endif %}
 
 Cron job: {{ message }}
