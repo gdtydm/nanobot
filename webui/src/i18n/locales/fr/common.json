@@ -438,6 +438,21 @@
     "sectionTitle": "Discussions temporaires",
     "closeAction": "Fermer la discussion temporaire : {{title}}"
   },
+  "conversations": {
+    "noTasks": "Aucune sous-tâche enregistrée pour cette conversation.",
+    "title": "Historique des conversations",
+    "description": "Consultez les messages enregistrés sur cet hôte, tous canaux confondus.",
+    "search": "Filtrer par titre ou canal",
+    "refresh": "Actualiser",
+    "back": "Retour",
+    "earlier": "Charger les messages précédents",
+    "empty": "Aucune conversation correspondante.",
+    "noMessages": "Aucun message enregistré dans cette conversation.",
+    "loading": "Chargement…",
+    "error": "Impossible de charger l’historique. Essayez d’actualiser.",
+    "user": "Utilisateur",
+    "assistant": "Assistant"
+  },
   "sidebar": {
     "resize": "Redimensionner la barre latérale",
     "navigation": "Navigation de la barre latérale",

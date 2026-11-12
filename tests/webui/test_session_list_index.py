@@ -369,6 +369,73 @@ def test_webui_session_list_fallback_time_when_missing(tmp_path: Path) -> None:
     datetime.fromisoformat(rows[0]["updated_at"])
 
 
+def test_conversations_api_lists_channels_and_pages_visible_history(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from urllib.parse import quote
+
+    from websockets.datastructures import Headers
+    from websockets.http11 import Request
+
+    from nanobot.bus.queue import MessageBus
+    from nanobot.channels.websocket.runtime import WebSocketConfig
+    from nanobot.webui.gateway_services import build_gateway_services
+
+    async def check():
+        monkeypatch.setattr("nanobot.config.paths.get_data_dir", lambda: tmp_path / "data")
+        manager = SessionManager(tmp_path / "workspace")
+        channel = manager.get_or_create("feishu.lark:chat")
+        for index in range(52):
+            channel.add_message("user" if index % 2 == 0 else "assistant", f"message {index}")
+        channel.add_message("assistant", "internal", **{HIDDEN_HISTORY_META: True})
+        manager.save(channel)
+        browser = manager.get_or_create("websocket:chat")
+        browser.add_message("user", "WebUI message")
+        manager.save(browser)
+        internal = manager.get_or_create("subagent:private")
+        internal.metadata[SESSION_TYPE_KEY] = "private-test-session"
+        internal.add_message("user", "private")
+        manager.save(internal)
+
+        gateway = build_gateway_services(
+            config=WebSocketConfig(), bus=MessageBus(), session_manager=manager,
+            static_dist_path=None, workspace_path=tmp_path / "workspace",
+            default_restrict_to_workspace=True, runtime_model_name=lambda: "test-model",
+            runtime_surface="gateway", runtime_capabilities_overrides=None,
+        )
+        token = gateway.tokens.issue_api_token(60)
+        connection = SimpleNamespace(remote_address=("127.0.0.1", 12345))
+        headers = Headers({"Authorization": f"Bearer {token}"})
+        base = "/api/webui/conversations"
+
+        async def get(path, request_headers=headers):
+            return await gateway.http.dispatch(connection, Request(path, request_headers))
+
+        try:
+            assert (await get(base, Headers())).status_code == 401
+            assert (await get(f"{base}/{quote(internal.key, safe='')}")).status_code == 404
+            rows = json.loads((await get(base)).body)["sessions"]
+            assert {row["key"] for row in rows} == {browser.key, channel.key}
+            old_client_rows = json.loads((await get("/api/sessions")).body)["sessions"]
+            assert [row["key"] for row in old_client_rows] == [browser.key]
+
+            path = f"{base}/{quote(channel.key, safe='')}"
+            first = json.loads((await get(path)).body)
+            assert [message["content"] for message in first["messages"]] == [
+                f"message {index}" for index in range(2, 52)
+            ]
+            second = json.loads((await get(
+                f"{path}?before={first['next_before']}&generation={first['generation']}"
+            )).body)
+            assert [message["content"] for message in second["messages"]] == ["message 0", "message 1"]
+            assert second["next_before"] is None
+            assert (await get(f"{path}?before=2&generation=stale")).status_code == 409
+        finally:
+            await manager.state.aclose()
+
+    asyncio.run(check())
+
+
 def test_session_manager_list_sessions_fallback_time_when_missing(tmp_path: Path) -> None:
     legacy = tmp_path / "sessions"
     legacy.mkdir()

@@ -489,6 +489,8 @@ class SqliteSessionStore:
         self,
         key: str,
         project: Callable[[SessionHistoryPayload, Iterator[tuple[int, dict[str, Any]]]], _T],
+        *,
+        before: int | None = None,
     ) -> _T | None:
         """Project the header and canonical messages without materializing history."""
         with self.transaction(write=False) as db:
@@ -500,10 +502,12 @@ class SqliteSessionStore:
             count = db.execute(
                 "SELECT COUNT(*) FROM messages WHERE session_key=?", (key,),
             ).fetchone()[0]
+            end = count if before is None else min(count, before)
             rows = db.execute(
-                "SELECT record FROM messages WHERE session_key=? ORDER BY position DESC", (key,),
+                "SELECT record FROM messages WHERE session_key=? ORDER BY position DESC LIMIT -1 OFFSET ?",
+                (key, count - end),
             )
-            messages = ((count - 1 - index, _object(row[0])) for index, row in enumerate(rows))
+            messages = ((end - 1 - index, _object(row[0])) for index, row in enumerate(rows))
             try:
                 return project(header, messages)
             finally:

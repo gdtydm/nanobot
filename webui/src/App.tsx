@@ -156,6 +156,10 @@ const SessionSearchDialog = lazy(async () => {
   const module = await import("@/components/SessionSearchDialog");
   return { default: module.SessionSearchDialog };
 });
+const ConversationsDialog = lazy(async () => {
+  const module = await import("@/components/ConversationsDialog");
+  return { default: module.ConversationsDialog };
+});
 const DeleteConfirm = lazy(async () => {
   const module = await import("@/components/DeleteConfirm");
   return { default: module.DeleteConfirm };
@@ -851,7 +855,7 @@ function Shell({
   }, [reportManagementSurface, theme]);
   const remoteConnectionsRef = useRef(remoteConnections);
   remoteConnectionsRef.current = remoteConnections;
-  const { client, getToken } = useClient();
+  const { client, getToken, webuiCapabilities } = useClient();
   useReconnectRuns(client, getToken);
   const {
     sessions,
@@ -905,6 +909,11 @@ function Shell({
   }, [localActive, managingConnections]);
   const mobileSidebarRef = useRef<HTMLDivElement>(null);
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
+  const [conversationsOpen, setConversationsOpen] = useState(false);
+  const conversationsSupported = webuiCapabilities.includes("webui.conversations.read.v1");
+  useEffect(() => {
+    if (!localActive || managingConnections || !conversationsSupported) setConversationsOpen(false);
+  }, [localActive, managingConnections, conversationsSupported]);
   const mobileWorkbench = useMediaQuery("(max-width: 767px)");
   const workbenchState = sidebarState.workbench;
   const updateWorkbenchState = useCallback((
@@ -2373,6 +2382,10 @@ function Shell({
     onOpenSkills,
     onSettingsIntent,
     onOpenSearch: onOpenSessionSearch,
+    onOpenConversations: conversationsSupported ? () => {
+      setMobileSidebarOpen(false);
+      setConversationsOpen(true);
+    } : undefined,
     activeUtility: !managingConnections && (view === "apps" || view === "automations" || view === "skills" || view === "channels") ? view : null,
     onToggleArchived,
     pinnedKeys: sidebarPinnedTabKeys,
@@ -2521,6 +2534,12 @@ function Shell({
               />
             </Suspense>
           ) : null}
+          {conversationsOpen && localActive && !managingConnections && conversationsSupported && (
+            <Suspense fallback={null}>
+              <ConversationsDialog getToken={getToken} onClose={() => setConversationsOpen(false)}
+                showTaskHistory={webuiCapabilities.includes("webui.conversations.tasks.read.v1")} />
+            </Suspense>
+          )}
         <main ref={managementMain}
           data-theme-surface
           aria-hidden={managingConnections && remoteConnections?.embeddedManagement || undefined}

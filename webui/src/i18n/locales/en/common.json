@@ -438,6 +438,21 @@
     "sectionTitle": "Temporary chats",
     "closeAction": "Close temporary chat: {{title}}"
   },
+  "conversations": {
+    "noTasks": "No saved subtasks for this conversation.",
+    "title": "Conversation history",
+    "description": "Read saved messages from this host across channels.",
+    "search": "Filter by title or channel",
+    "refresh": "Refresh",
+    "back": "Back",
+    "earlier": "Load earlier messages",
+    "empty": "No matching conversations.",
+    "noMessages": "No saved messages in this conversation.",
+    "loading": "Loading…",
+    "error": "Could not load the history. Try refreshing.",
+    "user": "User",
+    "assistant": "Assistant"
+  },
   "sidebar": {
     "resize": "Resize sidebar",
     "navigation": "Sidebar navigation",

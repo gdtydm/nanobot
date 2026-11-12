@@ -71,6 +71,7 @@ Share WebUI access only with people you trust to administer the same agent. To g
 | Topics | Start persistent topics or temporary chats; switch, search, reorder, fork, or delete persistent topics |
 | Conversation groups | Arrange up to four independent topics in one workbench with resizable panes |
 | Agent activity | See thinking, tool calls, file edits with diffs, command output, and generated artifacts in context |
+| Conversation history | Read saved messages across channels, including Feishu and WebUI |
 | Context usage | Inspect current context size, per-round token and cache usage, and compaction progress |
 | Workspace | Pick the project workspace before asking for file or shell work |
 | Access | Choose the access mode for local capabilities allowed by your gateway configuration |
@@ -88,6 +89,10 @@ Open **Settings → About** to check for updates automatically. Startup, reconne
 ## Topic Workspace
 
 The sidebar is the topic switcher. Each topic keeps its own history, title, workspace selection, and linked automations. Use a new topic when you want a separate context; use fork when you want to continue from an existing point without changing the original thread.
+
+Open **Conversation history** in the sidebar to browse saved conversations across channels on the connected host. Choose a conversation and select **Load earlier messages** to page through its user and assistant text. Continue a chat app conversation in its original app.
+
+Choose **Subtasks** within a saved conversation to inspect its delegated work. Open a task to view its conversation and tool activity, and use **Refresh** to update the saved record.
 
 Drag topics within a sidebar group to reorder them. **Rename** edits a topic title in place; a failed save keeps the draft for retry.
 

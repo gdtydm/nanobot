@@ -235,6 +235,45 @@ export async function listSessions(
   });
 }
 
+export type ConversationSummary = {
+  key: string;
+  title: string;
+  preview: string;
+  updated_at: string | null;
+};
+
+export type ConversationCursor = { before: number; generation: string };
+
+export type ConversationPage = {
+  messages: Array<{
+    message_index: number;
+    role: "user" | "assistant";
+    timestamp: string | number | null;
+    content: string;
+  }>;
+  next_before: number | null;
+  generation: string;
+};
+
+export async function listConversations(token: string, signal: AbortSignal): Promise<ConversationSummary[]> {
+  const body = await request<{ sessions: ConversationSummary[] }>(
+    "/api/webui/conversations", token, { signal }, API_READ_TIMEOUT_MS,
+  );
+  return body.sessions;
+}
+
+export function readConversation(
+  token: string, key: string, cursor: ConversationCursor | null, signal: AbortSignal,
+): Promise<ConversationPage> {
+  const params = cursor
+    ? new URLSearchParams({ before: String(cursor.before), generation: cursor.generation })
+    : null;
+  return request(
+    `/api/webui/conversations/${encodeURIComponent(key)}${params ? `?${params}` : ""}`,
+    token, { signal }, API_READ_TIMEOUT_MS,
+  );
+}
+
 /** Disk-backed WebUI display thread snapshot (separate from agent session). */
 export interface FetchWebuiThreadOptions {
   limit?: number;
@@ -696,9 +735,11 @@ export async function updateAutomation(
   return mutation<AutomationsPayload>(transport, "automation.update", { id, values });
 }
 
-export async function fetchSubagentTasks(token: string, sessionKey: string): Promise<SubagentTasksPayload> {
+export async function fetchSubagentTasks(
+  token: string, sessionKey: string, signal?: AbortSignal,
+): Promise<SubagentTasksPayload> {
   const payload = await request<unknown>(
-    `/api/sessions/${encodeURIComponent(sessionKey)}/subagents`, token, undefined, API_READ_TIMEOUT_MS,
+    `/api/sessions/${encodeURIComponent(sessionKey)}/subagents`, token, { signal }, API_READ_TIMEOUT_MS,
   );
   if (!isRecord(payload) || !Array.isArray(payload.tasks) || !payload.tasks.every(isSubagentTask)
     || new Set(payload.tasks.map((task) => task.task_id)).size !== payload.tasks.length) {

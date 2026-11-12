@@ -438,6 +438,21 @@
     "sectionTitle": "Chats temporários",
     "closeAction": "Fechar chat temporário: {{title}}"
   },
+  "conversations": {
+    "noTasks": "Esta conversa não tem subtarefas salvas.",
+    "title": "Histórico de conversas",
+    "description": "Veja as mensagens salvas neste host em todos os canais.",
+    "search": "Filtrar por título ou canal",
+    "refresh": "Atualizar",
+    "back": "Voltar",
+    "earlier": "Carregar mensagens anteriores",
+    "empty": "Nenhuma conversa correspondente.",
+    "noMessages": "Esta conversa não tem mensagens salvas.",
+    "loading": "Carregando…",
+    "error": "Não foi possível carregar o histórico. Tente atualizar.",
+    "user": "Usuário",
+    "assistant": "Assistente"
+  },
   "sidebar": {
     "resize": "Redimensionar a barra lateral",
     "navigation": "Navegação da barra lateral",

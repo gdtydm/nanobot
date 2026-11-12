@@ -438,6 +438,21 @@
     "sectionTitle": "Chats temporales",
     "closeAction": "Cerrar chat temporal: {{title}}"
   },
+  "conversations": {
+    "noTasks": "Esta conversación no tiene subtareas guardadas.",
+    "title": "Historial de conversaciones",
+    "description": "Consulta los mensajes guardados en este host de todos los canales.",
+    "search": "Filtrar por título o canal",
+    "refresh": "Actualizar",
+    "back": "Volver",
+    "earlier": "Cargar mensajes anteriores",
+    "empty": "No hay conversaciones que coincidan.",
+    "noMessages": "Esta conversación no tiene mensajes guardados.",
+    "loading": "Cargando…",
+    "error": "No se pudo cargar el historial. Prueba a actualizar.",
+    "user": "Usuario",
+    "assistant": "Asistente"
+  },
   "sidebar": {
     "resize": "Cambiar el ancho de la barra lateral",
     "navigation": "Navegación de la barra lateral",

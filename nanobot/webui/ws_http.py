@@ -36,6 +36,7 @@ from nanobot.cron.types import CronJob, CronSchedule
 from nanobot.runtime_admission import RuntimeMaintenanceError
 from nanobot.security.workspace_access import WorkspaceScope, WorkspaceScopeError
 from nanobot.session.display_history import HistoryReader
+from nanobot.session.history import SessionHistoryReader
 from nanobot.session.manager import SessionManager
 from nanobot.session.session_handles import (
     SessionHandle,
@@ -910,13 +911,21 @@ class GatewayHTTPHandler:
             return _http_error(exc.status, str(exc))
         return _http_json_response(result)
 
+    def _can_read_subagent_history(self, session_key: str) -> bool:
+        if is_webui_session_key(session_key):
+            return True
+        if self.session_manager is None:
+            return False
+        parent = self.session_manager.read_history_header(session_key)
+        return parent is not None and self.session_manager.types.public_history(parent["metadata"])
+
     async def _handle_subagents_get(self, request: WsRequest, key: str) -> Response:
         if not self.check_api_token(request):
             return _http_error(401, "Unauthorized")
         session_key = _decode_api_key(key)
         if session_key is None:
             return _http_error(400, "invalid session key")
-        if not is_webui_session_key(session_key):
+        if not await asyncio.to_thread(self._can_read_subagent_history, session_key):
             return _http_error(404, "session not found")
         if self.subagent_manager is None:
             return _http_error(503, "subagent manager unavailable")
@@ -955,7 +964,7 @@ class GatewayHTTPHandler:
         session_key, decoded_task_id = _decode_api_key(key), _decode_api_key(task_id)
         if session_key is None or decoded_task_id is None:
             return _http_error(400, "invalid task key")
-        if not is_webui_session_key(session_key):
+        if not self._can_read_subagent_history(session_key):
             return _http_error(404, "task unavailable")
         if self.subagent_manager is None:
             return _http_error(503, "task history unavailable")
@@ -1021,6 +1030,44 @@ class GatewayHTTPHandler:
 
             response = await self.session_manager.state.query_metadata(render_allocated)
         return response
+
+    async def _handle_conversations(self, request: WsRequest, key: str | None = None) -> Response:
+        if not self.check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self.session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        sessions = self.session_manager
+        if key is None:
+            def render(stored: list[dict[str, Any]]) -> Response:
+                rows = list_webui_sessions(sessions, stored)
+                fields = ("key", "title", "preview", "updated_at")
+                data = [{field: row[field] for field in fields} for row in rows]
+                return _http_json_response({"sessions": data}, extra_headers=_NO_STORE_HEADERS)
+
+            return await sessions.state.query_metadata(render)
+
+        session_key = _decode_api_key(key)
+        if session_key is None:
+            return _http_error(400, "invalid session key")
+        query = _parse_query(request.path)
+        raw_before = _query_first(query, "before")
+        if raw_before is not None and not re.fullmatch(r"[0-9]{1,15}", raw_before):
+            return _http_error(400, "invalid history cursor")
+        before = int(raw_before) if raw_before is not None else None
+        page_size = 50
+        match = await asyncio.to_thread(
+            SessionHistoryReader(sessions).read, session_key, query="", limit=page_size + 1, before=before,
+        )
+        if match is None:
+            return _http_error(404, "session not found")
+        expected_generation = _query_first(query, "generation")
+        if expected_generation is not None and expected_generation != match["generation"]:
+            return _http_error(409, "conversation changed")
+        messages = match["messages"][-page_size:]
+        next_before = messages[0]["message_index"] if len(match["messages"]) > page_size else None
+        return _http_json_response({
+            "messages": messages, "next_before": next_before, "generation": match["generation"],
+        }, extra_headers=_NO_STORE_HEADERS)
 
     def _sessions_list_from_snapshot(
         self, stored_sessions: list[dict[str, Any]],
@@ -1722,6 +1769,11 @@ class GatewayHTTPHandler:
     ) -> Response | None:
         if got == "/api/sessions":
             return await self._handle_sessions_list(request)
+        if got == "/api/webui/conversations":
+            return await self._handle_conversations(request)
+        conversation = re.fullmatch(r"/api/webui/conversations/([^/]+)", got)
+        if conversation:
+            return await self._handle_conversations(request, conversation.group(1))
         if got == "/api/commands":
             return self._handle_commands(request)
         if got == "/api/workspaces/favorite":

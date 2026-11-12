@@ -280,6 +280,7 @@ class SessionHistoryReader:
         *,
         query: str,
         limit: int,
+        before: int | None = None,
         exclude_session_key: str | None = None,
         cancelled: threading.Event | None = None,
         _for_search: bool = False,
@@ -306,7 +307,8 @@ class SessionHistoryReader:
             }
 
         return self._sessions.read_consistently(
-            lambda: self._sessions.project_session_messages(session_key, project), cancelled=cancelled,
+            lambda: self._sessions.project_session_messages(session_key, project, before=before),
+            cancelled=cancelled,
         )
 
     async def avalidate(

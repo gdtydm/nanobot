@@ -15,7 +15,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { PanelLeftClose } from "lucide-react";
+import { History, PanelLeftClose } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -78,6 +78,7 @@ interface SidebarProps {
   onOpenChannels: () => void;
   onSettingsIntent?: () => void;
   onOpenSearch: () => void;
+  onOpenConversations?: () => void;
   activeUtility?: "apps" | "skills" | "automations" | "channels" | null;
   onToggleArchived: () => void;
   onCollapse?: () => void;
@@ -266,6 +267,14 @@ export function Sidebar(props: SidebarProps) {
           selectionRef={activeActionRef}
           icon={<ChannelsIcon className="h-4 w-4" />}
         />
+        {props.onOpenConversations && (
+          <SidebarActionButton
+            collapsed={collapsed}
+            label={t("conversations.title")}
+            onClick={props.onOpenConversations}
+            icon={<History className="h-4 w-4" />}
+          />
+        )}
         {props.archivedCount ? (
           <SidebarActionButton
             collapsed={collapsed}

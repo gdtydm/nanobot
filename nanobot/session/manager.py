@@ -635,12 +635,14 @@ class SessionManager:
         self,
         key: str,
         project: Callable[[SessionHistoryPayload, Iterator[tuple[int, dict[str, Any]]]], _T],
+        *,
+        before: int | None = None,
     ) -> _T | None:
         """Project a session header and reverse message stream within one snapshot.
 
         The stream is valid only during the callback.
         """
-        return self._store.project_session_messages(key, project)
+        return self._store.project_session_messages(key, project, before=before)
 
     def project_session_handle_names(
         self, project: Callable[[Iterator[tuple[str, object]]], _T],

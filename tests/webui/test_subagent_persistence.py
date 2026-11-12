@@ -138,7 +138,8 @@ async def test_cancelled_task_creation_removes_committed_child(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_child_thread_reads_real_session_through_parent_without_new_persistence(tmp_path):
+@pytest.mark.parametrize("parent", ["websocket:parent", "feishu.lark:parent"])
+async def test_child_thread_reads_real_session_through_parent_without_new_persistence(tmp_path, parent):
     workspace, root = tmp_path / "agent", tmp_path / "sessions"
     workspace.mkdir()
     (workspace / "config.txt").write_text("configured value", encoding="utf-8")
@@ -161,12 +162,13 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
     runtime.provider.chat_stream_with_retry = AsyncMock(side_effect=respond)
     gateway, connection, headers = gateway_for(manager, sessions, workspace)
     try:
-        await manager.spawn("Inspect configuration", session_key="websocket:parent", runtime=runtime)
-        task_id, = manager.statuses_for_session("websocket:parent")
+        await manager.spawn("Inspect configuration", session_key=parent, runtime=runtime)
+        task_id, = manager.statuses_for_session(parent)
         # Bound each round, rather than the combined startup/tool/persistence work.
         await wait_for_model_requests(manager, task_id, model_requests, 2)
         child_key = SubagentSessions.key(task_id)
-        path = f"/api/sessions/websocket%3Aparent/subagents/{task_id}/webui-thread"
+        list_path = f"/api/sessions/{quote(parent, safe='')}/subagents"
+        path = f"{list_path}/{task_id}/webui-thread"
         files_before = set(root.rglob("*"))
         denied = await gateway.http.dispatch(connection, Request(path, Headers()))
         assert denied.status_code == 401
@@ -180,6 +182,9 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
             f"/api/sessions/{quote(child_key, safe='')}/webui-thread", headers,
         ))
         assert direct.status_code == 404
+        listing = await gateway.http.dispatch(connection, Request(list_path, headers))
+        assert listing.status_code == 200
+        assert [task["task_id"] for task in json.loads(listing.body)["tasks"]] == [task_id]
         response = await gateway.http.dispatch(connection, Request(path, headers))
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "no-store"
@@ -192,9 +197,14 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
         assert tool["tool_events"][0]["phase"] == "end"
         assert "configured value" in tool["tool_events"][0]["result"]
         assert set(root.rglob("*")) == files_before
+        if parent.startswith("feishu"):
+            cancel = await gateway.http.dispatch_webui_mutation(
+                connection, "subagent.cancel", {"session_key": parent, "task_id": task_id},
+            )
+            assert cancel.status_code == 400
         release.set()
         await asyncio.gather(*list(manager._running_tasks.values()))
-        assert len(manager.check(task_id, "websocket:parent").result) == 16000
+        assert len(manager.check(task_id, parent).result) == 16000
         await manager.close()
         manager, sessions, _ = manager_with_storage(workspace, root)
         gateway, connection, headers = gateway_for(manager, sessions, workspace)
@@ -206,8 +216,11 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
             event["projection_id"] for event in running["events"]
         ]
         assert manager.get_running_count() == 0
-        deleted = await gateway.http.dispatch_webui_mutation(connection, "session.delete", {"key": "websocket:parent"})
-        assert deleted.status_code == 200
+        if parent.startswith("websocket"):
+            deleted = await gateway.http.dispatch_webui_mutation(connection, "session.delete", {"key": parent})
+            assert deleted.status_code == 200
+        else:
+            await sessions.state.delete(parent)
         assert (await gateway.http.dispatch(connection, Request(path, headers))).status_code == 404
     finally:
         release.set()

@@ -438,6 +438,21 @@
     "sectionTitle": "Obrolan sementara",
     "closeAction": "Tutup obrolan sementara: {{title}}"
   },
+  "conversations": {
+    "noTasks": "Belum ada subtugas tersimpan untuk percakapan ini.",
+    "title": "Riwayat percakapan",
+    "description": "Lihat pesan dari semua kanal yang tersimpan di host ini.",
+    "search": "Filter menurut judul atau kanal",
+    "refresh": "Muat ulang",
+    "back": "Kembali",
+    "earlier": "Muat pesan sebelumnya",
+    "empty": "Tidak ada percakapan yang cocok.",
+    "noMessages": "Belum ada pesan tersimpan dalam percakapan ini.",
+    "loading": "Memuat…",
+    "error": "Riwayat tidak dapat dimuat. Coba muat ulang.",
+    "user": "Pengguna",
+    "assistant": "Asisten"
+  },
   "sidebar": {
     "resize": "Ubah lebar bilah samping",
     "navigation": "Navigasi bilah samping",

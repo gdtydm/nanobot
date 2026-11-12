@@ -438,6 +438,21 @@
     "sectionTitle": "Trò chuyện tạm thời",
     "closeAction": "Đóng trò chuyện tạm thời: {{title}}"
   },
+  "conversations": {
+    "noTasks": "Cuộc trò chuyện này chưa có nhiệm vụ con đã lưu.",
+    "title": "Lịch sử trò chuyện",
+    "description": "Xem tin nhắn đã lưu trên máy chủ này từ mọi kênh.",
+    "search": "Lọc theo tiêu đề hoặc kênh",
+    "refresh": "Làm mới",
+    "back": "Quay lại",
+    "earlier": "Tải tin nhắn cũ hơn",
+    "empty": "Không có cuộc trò chuyện phù hợp.",
+    "noMessages": "Cuộc trò chuyện này chưa có tin nhắn đã lưu.",
+    "loading": "Đang tải…",
+    "error": "Không thể tải lịch sử. Hãy thử làm mới.",
+    "user": "Người dùng",
+    "assistant": "Trợ lý"
+  },
   "sidebar": {
     "resize": "Điều chỉnh độ rộng thanh bên",
     "navigation": "Điều hướng thanh bên",

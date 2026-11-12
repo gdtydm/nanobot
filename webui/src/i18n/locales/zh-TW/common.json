@@ -438,6 +438,21 @@
     "sectionTitle": "臨時聊天",
     "closeAction": "關閉臨時聊天：{{title}}"
   },
+  "conversations": {
+    "noTasks": "此對話還沒有子任務紀錄。",
+    "title": "對話紀錄",
+    "description": "查看此主機儲存的各管道對話。",
+    "search": "依標題或管道篩選",
+    "refresh": "重新整理",
+    "back": "返回",
+    "earlier": "載入較早的訊息",
+    "empty": "沒有符合的對話。",
+    "noMessages": "此對話沒有已儲存的訊息。",
+    "loading": "載入中…",
+    "error": "無法載入紀錄，請重新整理後再試。",
+    "user": "使用者",
+    "assistant": "助理"
+  },
   "sidebar": {
     "resize": "調整側欄寬度",
     "navigation": "側邊欄導覽",
