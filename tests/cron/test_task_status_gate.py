@@ -205,6 +205,24 @@ async def test_real_completion_overrides_stale_file_without_llm_manual_update(tm
         await manager.close()
 
 
+def test_installer_only_adds_one_scoped_twenty_minute_job(tmp_path):
+    from scripts.install_task_progress_gate import INTERVAL_MS, TASK_IDS, install
+
+    cron = CronService(tmp_path / "cron" / "jobs.json")
+    old = cron.add_job("old", CronSchedule(kind="every", every_ms=1200000), "old prompt",
+        session_key="websocket:owner", origin_channel="websocket", origin_chat_id="owner")
+    with pytest.raises(ValueError, match="disabled"):
+        install(cron, old.id)
+    cron.enable_job(old.id, False)
+    new = install(cron, old.id)
+    assert new.schedule.every_ms == INTERVAL_MS == 1_200_000
+    assert new.payload.task_gate["task_ids"] == TASK_IDS
+    assert new.payload.session_key == old.payload.session_key
+    assert install(cron, old.id).id == new.id
+    assert not cron.get_job(old.id).enabled
+    assert len(cron.list_jobs(include_disabled=True)) == 2
+
+
 @pytest.mark.parametrize("updated,allowed", [("2026-11-12T12:00:00+00:00", True),
     ("2026-11-12T09:00:00Z", False), ("2026-11-12T12:00:00", False)])
 def test_external_lease_requires_fresh_unambiguous_timestamp(tmp_path, job, updated, allowed):
