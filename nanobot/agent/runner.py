@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, ParamSpec, TypeVar, cast
 from uuid import uuid4
@@ -72,6 +73,7 @@ def _raise_if_cancelling() -> None:
 
 ContinuationCallback = Callable[[], Awaitable[str | None]]
 CheckpointCallback = Callable[[dict[str, Any]], Awaitable[None]]
+ModelRequestObserver = Callable[[str, str, Mapping[str, Any]], Awaitable[None]]
 InjectionCallback = Callable[[], Awaitable[Iterable[Any] | None]]
 
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
@@ -124,6 +126,7 @@ class AgentRunSpec:
     provider_state: ProviderConversationState | None = None
     llm_usage_source: LLMUsageSource | None = None
     events: EventSink = NO_EVENTS
+    observe_model_request: ModelRequestObserver | None = None
 
 
 @dataclass(slots=True)
@@ -983,6 +986,13 @@ class AgentRunner:
                 await spec.hook.before_model_request()
             await emit("started")
             _raise_if_cancelling()
+            if spec.observe_model_request is not None:
+                await spec.observe_model_request(request_id, "nanobot", kwargs)
+                context = cast(ProviderCallContext, kwargs["provider_context"])
+                kwargs["provider_context"] = replace(
+                    context, observe_codex_payload=partial(spec.observe_model_request, request_id),
+                )
+                _raise_if_cancelling()
             response = await spec.runtime.provider.chat_stream_with_retry(**kwargs)
             _raise_if_cancelling()
         except asyncio.CancelledError:

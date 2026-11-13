@@ -7,7 +7,7 @@ import random
 import re
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -287,6 +287,9 @@ class ProviderCallContext:
     # Owned by one retry chain, shared only by its provider attempts.
     compaction: ProviderCompactionEvents | None = field(default=None, repr=False, compare=False)
     on_native_compaction: Callable[[ProviderConversationState], Awaitable[None]] | None = field(
+        default=None, repr=False, compare=False,
+    )
+    observe_codex_payload: Callable[[str, Mapping[str, Any]], Awaitable[None]] | None = field(
         default=None, repr=False, compare=False,
     )
 

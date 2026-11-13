@@ -27,6 +27,7 @@ class HistoryKind(StrEnum):
     FORK_BOUNDARY = "fork_boundary"
     COMPACTION = "compaction"
     MODEL_REQUEST = "model_request"
+    MODEL_REQUEST_INPUT = "model_request_input"
     # Only old transcripts can contain unfinished transport fragments.
     ANSWER_FRAGMENT = "answer_fragment"
     REASONING_FRAGMENT = "reasoning_fragment"
@@ -245,3 +246,20 @@ class HistoryReader:
             "SELECT record FROM history_entries WHERE session_key=? ORDER BY turn_ordinal, position",
             (self.key,),
         )]
+
+    def model_request_inputs(self) -> Iterator[tuple[int, HistoryFact]]:
+        """List private request headers without transferring the captured bodies."""
+        for position, record in self._db.execute(
+            """SELECT position, json_remove(record, '$.content.body_zlib') FROM history_entries
+               WHERE session_key=? AND turn_ordinal=0 AND kind=? ORDER BY position""",
+            (self.key, HistoryKind.MODEL_REQUEST_INPUT),
+        ):
+            yield int(position), HistoryFact.decode(record)
+
+    def model_request_input(self, position: int) -> HistoryFact | None:
+        row = self._db.execute(
+            """SELECT record FROM history_entries
+               WHERE session_key=? AND turn_ordinal=0 AND position=? AND kind=?""",
+            (self.key, position, HistoryKind.MODEL_REQUEST_INPUT),
+        ).fetchone()
+        return HistoryFact.decode(row[0]) if row is not None else None

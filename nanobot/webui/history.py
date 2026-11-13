@@ -105,7 +105,7 @@ def _records_from_entries(
 ) -> list[dict[str, Any]]:
     return [{**record_from_fact(fact, history.key, expand_graphs=False),
              "_webui_replay_identity": f"turn:{ordinal}:record:{position}"}
-            for position, fact in entries]
+            for position, fact in entries if fact.kind is not HistoryKind.MODEL_REQUEST_INPUT]
 
 
 def turn_records(history: HistoryReader, ordinal: int) -> list[dict[str, Any]]:

@@ -9,7 +9,8 @@ import json
 import os
 import re
 import ssl
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from functools import partial
 from typing import Any, cast
 
 import httpx
@@ -314,6 +315,8 @@ class OpenAICodexProvider(LLMProvider):
                 validate: Callable[[LLMResponse], object] | None = None,
             ) -> LLMResponse:
                 wire_body = await prepare_inline_images(without_response_item_ids(request_body))
+                observer = provider_context.observe_codex_payload if provider_context is not None else None
+                transport = "Codex compaction" if trace_name == "codex_compaction" else "Codex"
                 tracer = _start_codex_langfuse_generation(
                     name=trace_name,
                     model=_strip_model_prefix(str(wire_body.get("model") or model)),
@@ -329,8 +332,13 @@ class OpenAICodexProvider(LLMProvider):
                             on_content_delta=on_content_delta if emit_deltas else None,
                             on_thinking_delta=on_thinking_delta if emit_deltas else None,
                             on_tool_call_delta=on_tool_call_delta if emit_deltas else None,
+                            observe_payload=partial(observer, f"{transport} WebSocket") if observer is not None else None,
                         )
                     if result is None:
+                        trace_options = (
+                            {"observe_payload": partial(observer, f"{transport} HTTP")}
+                            if observer is not None else {}
+                        )
                         result = await _request_codex(
                             DEFAULT_CODEX_URL,
                             headers,
@@ -340,6 +348,7 @@ class OpenAICodexProvider(LLMProvider):
                             on_content_delta=on_content_delta if emit_deltas else None,
                             on_thinking_delta=on_thinking_delta if emit_deltas else None,
                             on_tool_call_delta=on_tool_call_delta if emit_deltas else None,
+                            **trace_options,
                         )
                     if validate is not None:
                         validate(result)
@@ -608,12 +617,14 @@ async def _request_codex(
     on_content_delta: Callable[[str], Awaitable[None]] | None = None,
     on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
     on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    observe_payload: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None,
 ) -> LLMResponse:
     return await ResponsesBackend.sse_request(
         url, headers, body, provider=f"openai_codex:{url.rstrip('/')}",
         verify=verify, proxy=proxy, error_factory=_build_codex_http_error,
         on_content_delta=on_content_delta, on_thinking_delta=on_thinking_delta,
         on_tool_call_delta=on_tool_call_delta,
+        observe_payload=observe_payload,
     )
 
 

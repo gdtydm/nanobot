@@ -8,7 +8,7 @@ import json
 import re
 import ssl
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, cast
 
 from loguru import logger
@@ -138,6 +138,7 @@ class ResponsesWebSocketSession:
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        observe_payload: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None,
     ) -> LLMResponse | None:
         """Return None when this session must use the HTTP transport."""
         async with self.lock:
@@ -231,6 +232,8 @@ class ResponsesWebSocketSession:
                             response_started = True
 
                     try:
+                        if observe_payload is not None:
+                            await observe_payload(payload)
                         await self._connection.send(payload_json)
                         result = await ResponsesBackend.consume(
                             self._events(self._connection), provider=provider, body=body,

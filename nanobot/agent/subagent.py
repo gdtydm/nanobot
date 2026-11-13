@@ -25,6 +25,7 @@ from nanobot.agent.subagent_project import prepare_project_worktree, reclaim_pro
 from nanobot.agent.subagent_sessions import SubagentSessions
 from nanobot.agent.subagent_status import SubagentSessionError, SubagentStatus
 from nanobot.agent.subagent_status import SubagentState as SubagentState
+from nanobot.agent.subagent_trace import SubagentRequestTrace
 from nanobot.agent.tools.base import Tool, ToolResult
 from nanobot.agent.tools.context import (
     RequestContext,
@@ -43,7 +44,7 @@ from nanobot.bus.queue import MessageBus
 from nanobot.bus.runtime_events import RuntimeEventContext, SubagentTaskChanged
 from nanobot.config.network import NetworkConfig
 from nanobot.config.schema import AgentDefaults, ToolsConfig
-from nanobot.context_sources import without_source_capture
+from nanobot.context_sources import capture_sources, without_source_capture
 from nanobot.events import AgentEvent, EventSink
 from nanobot.llm_usage.context import LLMUsageSource, current_llm_usage_source
 from nanobot.providers.base import LLMProvider, ToolCallRequest
@@ -937,10 +938,16 @@ class SubagentManager:
         tools = self._build_tools(
             tools_config=cfg, exec_manager=record.exec_manager, repository_skill_roots=repository_skill_roots,
         )
-        system_prompt = self._build_subagent_prompt(
-            workspace=root, project=status.project is not None, worktree=status.worktree is not None,
-            project_skill_roots=project_skill_roots,
-        )
+        observe_model_request = None
+        trace_enabled = self.sessions is not None and record.session.policy.persist and record.session.policy.log_content
+        with capture_sources() if trace_enabled else nullcontext() as sources:
+            system_prompt = self._build_subagent_prompt(
+                workspace=root, project=status.project is not None, worktree=status.worktree is not None,
+                project_skill_roots=project_skill_roots,
+            )
+        if self.sessions is not None and sources is not None:
+            trace = SubagentRequestTrace(self.sessions.sessions.state, record.session, sources.sources)
+            observe_model_request = trace.record
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             *record.session.get_history(),
@@ -1025,6 +1032,7 @@ class SubagentManager:
                 consolidate_history=consolidate_history,
                 consolidate_provider_compaction=consolidate_provider_compaction,
                 events=events,
+                observe_model_request=observe_model_request,
             ))
         finally:
             if token is not None:
@@ -1144,6 +1152,7 @@ class SubagentManager:
         )
         return render_template(
             "agent/subagent_system.md",
+            track_source=True,
             workspace=str(project_workspace),
             agent_workspace=str(agent_workspace),
             history_log=history_log,

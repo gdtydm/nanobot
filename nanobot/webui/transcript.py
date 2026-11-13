@@ -26,6 +26,7 @@ from nanobot.session.automation_turns import is_automation_kind
 from nanobot.session.display_history import (
     HISTORY_GENERATION_METADATA_KEY,
     HistoryFact,
+    HistoryKind,
     HistoryReader,
 )
 from nanobot.session.history_graph import (
@@ -500,7 +501,8 @@ def _select_transcript_page(
 
 
 def read_transcript_lines(session_key: str, *, history: HistoryReader) -> list[dict[str, Any]]:
-    return [record_from_fact(fact, session_key) for fact in history.all_facts()]
+    return [record_from_fact(fact, session_key) for fact in history.all_facts()
+            if fact.kind is not HistoryKind.MODEL_REQUEST_INPUT]
 
 
 def _now_ms() -> int:

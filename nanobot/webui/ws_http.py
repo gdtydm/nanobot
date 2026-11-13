@@ -27,7 +27,7 @@ from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
 from nanobot.agent.subagent import SubagentControlError
-from nanobot.agent.subagent_status import SubagentSessionError
+from nanobot.agent.subagent_status import SubagentSessionError, SubagentStatus
 from nanobot.command.application import builtin_command_palette
 from nanobot.context_graph import ContextGraph
 from nanobot.cron.binding import CronBindingError, binding_revision
@@ -37,7 +37,7 @@ from nanobot.runtime_admission import RuntimeMaintenanceError
 from nanobot.security.workspace_access import WorkspaceScope, WorkspaceScopeError
 from nanobot.session.display_history import HistoryReader
 from nanobot.session.history import SessionHistoryReader
-from nanobot.session.manager import SessionManager
+from nanobot.session.manager import Session, SessionManager
 from nanobot.session.session_handles import (
     SessionHandle,
     SessionHandleResolver,
@@ -132,6 +132,7 @@ from nanobot.webui.skills_marketplace import (
     trending_marketplace_skills,
 )
 from nanobot.webui.star_prompt import update_star_prompt
+from nanobot.webui.subagent_trace import request_detail, tool_detail, trace_index
 from nanobot.webui.transcript import (
     TranscriptReplayStats,
     build_session_thread_response,
@@ -876,6 +877,10 @@ class GatewayHTTPHandler:
         if m:
             return self._handle_session_automations(request, m.group(1))
 
+        m = re.fullmatch(r"/api/sessions/([^/]+)/subagents/([^/]+)/trace", got)
+        if m:
+            return await self._handle_subagent_trace_get(request, m.group(1), m.group(2))
+
         m = re.fullmatch(r"/api/sessions/([^/]+)/subagents/([^/]+)/webui-thread", got)
         if m:
             return await asyncio.to_thread(self._handle_subagent_thread_get, request, m.group(1), m.group(2))
@@ -958,7 +963,7 @@ class GatewayHTTPHandler:
             return _http_error(503, "task history unavailable")
         return _http_json_response(status.as_dict(), extra_headers=_NO_STORE_HEADERS)
 
-    def _handle_subagent_thread_get(self, request: WsRequest, key: str, task_id: str) -> Response:
+    def _read_subagent(self, request: WsRequest, key: str, task_id: str) -> tuple[str, SubagentStatus, Session] | Response:
         if not self.check_api_token(request):
             return _http_error(401, "Unauthorized")
         session_key, decoded_task_id = _decode_api_key(key), _decode_api_key(task_id)
@@ -974,6 +979,50 @@ class GatewayHTTPHandler:
             return _http_error(404, "task unavailable")
         except (OSError, SubagentSessionError):
             return _http_error(503, "task history unavailable")
+        return session_key, status, child
+
+    async def _handle_subagent_trace_get(self, request: WsRequest, key: str, task_id: str) -> Response:
+        if not self.check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        request_index = _query_first(query, "request")
+        tool_index = _query_first(query, "tool")
+        raw_index = request_index if request_index is not None else tool_index
+        if ((request_index is not None and tool_index is not None)
+                or (raw_index is not None and re.fullmatch(r"[0-9]{1,9}", raw_index) is None)):
+            return _http_error(400, "invalid trace entry")
+        index = int(raw_index) if raw_index is not None else None
+        owned = await asyncio.to_thread(self._read_subagent, request, key, task_id)
+        if isinstance(owned, Response):
+            return owned
+        _, _, child = owned
+        if self.session_manager is None or not child.policy.persist or not child.policy.log_content:
+            return _http_error(404, "task unavailable")
+
+        def project(history: HistoryReader) -> Response:
+            revision = history.revision
+            if revision is None or revision[0] != child.generation:
+                return _http_error(404, "task unavailable")
+            if index is None:
+                data = trace_index(child, history)
+            elif request_index is not None:
+                data = request_detail(history, index)
+            else:
+                data = tool_detail(child, index, _query_first(query, "id") or "")
+            if data is None:
+                return _http_error(404, "trace entry unavailable")
+            return _http_json_response(
+                data, accept_encoding=_combined_list_header(request.headers, "Accept-Encoding"),
+                extra_headers=_NO_STORE_HEADERS,
+            )
+
+        return await self.session_manager.state.project_history(child.key, project)
+
+    def _handle_subagent_thread_get(self, request: WsRequest, key: str, task_id: str) -> Response:
+        owned = self._read_subagent(request, key, task_id)
+        if isinstance(owned, Response):
+            return owned
+        session_key, status, child = owned
         scope = self.workspaces.scope_for_session_key(session_key)
         data = build_session_thread_response(
             child,

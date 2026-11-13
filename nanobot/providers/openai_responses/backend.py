@@ -4,7 +4,7 @@ import asyncio
 import json
 import ssl
 from collections import OrderedDict
-from collections.abc import AsyncIterable, Awaitable, Callable
+from collections.abc import AsyncIterable, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -88,6 +88,7 @@ class ResponsesBackend:
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        observe_payload: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None,
     ) -> LLMResponse | None:
         from nanobot.providers.openai_responses.websocket import ResponsesWebSocketSession
 
@@ -114,6 +115,7 @@ class ResponsesBackend:
                 url, headers, body, provider=provider, verify=verify, proxy=proxy,
                 on_content_delta=on_content_delta, on_thinking_delta=on_thinking_delta,
                 on_tool_call_delta=on_tool_call_delta,
+                observe_payload=observe_payload,
             )
         finally:
             session.active_requests -= 1
@@ -254,6 +256,7 @@ class ResponsesBackend:
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         on_response_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        observe_payload: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         options: dict[str, Any] = {"timeout": resolve_stream_idle_timeout_s()}
         body = await prepare_inline_images(body)
@@ -262,6 +265,8 @@ class ResponsesBackend:
         if proxy:
             options.update(proxy=proxy, trust_env=False)
         async with httpx.AsyncClient(**options) as client:
+            if observe_payload is not None:
+                await observe_payload(body)
             async with client.stream("POST", url, headers=headers, json=body) as response:
                 if response.status_code != 200:
                     raw = (await response.aread()).decode("utf-8", "ignore")

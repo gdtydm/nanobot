@@ -643,7 +643,7 @@ class SqliteSessionStore:
             copied: list[HistoryFact] = []
             inputs = 0
             for fact in reader.all_facts():
-                if fact.kind is HistoryKind.FORK_BOUNDARY:
+                if fact.kind in {HistoryKind.FORK_BOUNDARY, HistoryKind.MODEL_REQUEST_INPUT}:
                     continue
                 if fact.kind is HistoryKind.INPUT:
                     if inputs == before_input:

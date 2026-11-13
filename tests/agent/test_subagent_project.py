@@ -177,6 +177,9 @@ async def test_feishu_project_tasks_use_distinct_worktrees_and_resume_their_own(
         assert "Follow the project analysis workflow" in prompt
         assert "Local repository draft" not in prompt
         assert "BRANCH_SKILL" not in prompt and "ANALYSIS_SKILL" not in prompt
+        await spec.observe_model_request(
+            "test-project-request", "nanobot", {"messages": spec.initial_messages, "model": "test"},
+        )
         write = spec.tools.get("write_file")
         assert write is not None
         await write.execute(path="worker.txt", content="edited")
@@ -218,6 +221,14 @@ async def test_feishu_project_tasks_use_distinct_worktrees_and_resume_their_own(
         second_id, = re.findall(r"id: ([a-f0-9-]+)", second)
         paths = {await asyncio.wait_for(ready.get(), 15), await asyncio.wait_for(ready.get(), 15)}
         assert len(paths) == 2
+        for task_id in (first_id, second_id):
+            _, child = manager.read_session(task_id, OWNER)
+            entries = await sessions.state.project_history(child.key, lambda history: list(history.model_request_inputs()))
+            (_, request), = entries
+            assert request.content["sources"] == [
+                str(Path(manager.check(task_id, OWNER).worktree) / "AGENTS.override.md"),
+                str(Path(__file__).resolve().parents[2] / "nanobot/templates/agent/subagent_system.md"),
+            ]
         assert all((path / "worker.txt").read_text() == "edited" for path in paths)
         assert not (repo / "worker.txt").exists()
         assert "finished project task" in await start("LOC-1", resume_task_id=first_id)

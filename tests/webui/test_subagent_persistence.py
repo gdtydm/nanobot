@@ -33,7 +33,7 @@ from nanobot.providers.base import (
 )
 from nanobot.session.jsonl_migration import WORKSPACE_BACKUP_DIR
 from nanobot.session.location import SessionLocation
-from nanobot.session.manager import SessionManager
+from nanobot.session.manager import SessionManager, SessionPolicy
 from nanobot.session.session_handles import SessionHandleResolver
 from nanobot.session.summary import SessionSummaryCheckpoint, is_summary_checkpoint
 from nanobot.session.types import PARENT_SESSION_KEY, SESSION_TYPE_KEY
@@ -148,9 +148,12 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
     final_text = ("## Findings\n\n" + "Verified configuration.\n" * 1000).rstrip()
     calls = 0
 
-    async def respond(**_kwargs):
+    inputs = []
+
+    async def respond(**kwargs):
         nonlocal calls
         calls += 1
+        inputs.append((kwargs["messages"], kwargs["tools"]))
         model_requests.put_nowait(None)
         if calls == 1:
             return LLMResponse(content="Inspecting configuration", tool_calls=[
@@ -169,6 +172,7 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
         child_key = SubagentSessions.key(task_id)
         list_path = f"/api/sessions/{quote(parent, safe='')}/subagents"
         path = f"{list_path}/{task_id}/webui-thread"
+        trace_path = f"{list_path}/{task_id}/trace"
         files_before = set(root.rglob("*"))
         denied = await gateway.http.dispatch(connection, Request(path, Headers()))
         assert denied.status_code == 401
@@ -196,6 +200,28 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
         tool = next(event for event in running["events"] if event.get("kind") == "tool_hint")
         assert tool["tool_events"][0]["phase"] == "end"
         assert "configured value" in tool["tool_events"][0]["result"]
+        assert (await gateway.http.dispatch(connection, Request(trace_path, Headers()))).status_code == 401
+        wrong_parent = trace_path.replace("parent", "other") + "?request=0"
+        assert (await gateway.http.dispatch(connection, Request(wrong_parent, headers))).status_code == 404
+        response = await gateway.http.dispatch(connection, Request(trace_path, headers))
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "no-store"
+        trace = json.loads(response.body)
+        assert [request["transport"] for request in trace["requests"]] == ["nanobot", "nanobot"]
+        assert any(source.endswith("/subagent_system.md") for source in trace["sources"])
+        assert trace["tools"] == [
+            {"index": 0, "id": "read-config", "name": "read_file", "phase": "end", "target": "config.txt"},
+        ]
+        response = await gateway.http.dispatch(connection, Request(trace_path + "?tool=0&id=read-config", headers))
+        call = json.loads(json.loads(response.body)["body"])
+        assert call["arguments"] == {"path": "config.txt"}
+        assert "configured value" in call["result"]
+        response = await gateway.http.dispatch(connection, Request(trace_path + "?request=1", headers))
+        request = json.loads(json.loads(response.body)["body"])
+        assert request["messages"] == inputs[1][0]
+        assert request["tools"] == inputs[1][1]
+        assert any(message["role"] == "tool" and "configured value" in message["content"]
+                   for message in request["messages"])
         assert set(root.rglob("*")) == files_before
         if parent.startswith("feishu"):
             cancel = await gateway.http.dispatch_webui_mutation(
@@ -210,6 +236,8 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
         gateway, connection, headers = gateway_for(manager, sessions, workspace)
         response = await gateway.http.dispatch(connection, Request(path, headers))
         completed = json.loads(response.body)
+        response = await gateway.http.dispatch(connection, Request(trace_path + "?request=1", headers))
+        assert json.loads(json.loads(response.body)["body"]) == request
         assert completed["active_turn_id"] is None
         assert next(event["text"] for event in completed["events"] if event.get("turn_phase") == "answer") == final_text
         assert [event["projection_id"] for event in completed["events"][:3]] == [
@@ -222,6 +250,7 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
         else:
             await sessions.state.delete(parent)
         assert (await gateway.http.dispatch(connection, Request(path, headers))).status_code == 404
+        assert (await gateway.http.dispatch(connection, Request(trace_path + "?request=1", headers))).status_code == 404
     finally:
         release.set()
         await manager.close()
@@ -838,6 +867,7 @@ async def test_temporary_parent_never_persists_task_content(tmp_path, monkeypatc
     parent = await sessions.state.register_transient("websocket:temporary")
     async def run(_spec):
         assert current_request_context().log_content is False
+        assert _spec.observe_model_request is None
         return AgentRunResult(messages=[], final_content="Private findings")
 
     manager.runner.run = run
@@ -862,6 +892,25 @@ async def test_temporary_parent_never_persists_task_content(tmp_path, monkeypatc
         await reopened.close()
     finally:
         await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_persisted_subagent_without_content_logging_has_no_request_capture(tmp_path):
+    workspace, root = tmp_path / "agent", tmp_path / "sessions"
+    manager, sessions, runtime = manager_with_storage(workspace, root)
+    runtime.provider.chat_stream_with_retry = AsyncMock(return_value=LLMResponse(content="Done"))
+    parent = "websocket:parent"
+    try:
+        await manager.run_inline(
+            "private task", session_key=parent, runtime=runtime, session_policy=SessionPolicy(log_content=False),
+        )
+        task_id, = manager.statuses_for_session(parent)
+        child_key = SubagentSessions.key(task_id)
+        assert runtime.provider.chat_stream_with_retry.await_args.kwargs["provider_context"].observe_codex_payload is None
+        assert await sessions.state.project_history(child_key, lambda history: list(history.model_request_inputs())) == []
+    finally:
+        await manager.close()
+        await sessions.state.aclose()
 
 
 @pytest.mark.asyncio

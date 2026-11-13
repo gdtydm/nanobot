@@ -394,6 +394,10 @@ async def test_codex_continues_attachment_and_tool_turns_without_replaying_histo
     messages = _messages([{"type": "image_url", "image_url": {"url": image}}, {"type": "text", "text": "Read this image."}])
     thinking = []
     tool_progress = []
+    observed = []
+
+    async def observe(transport, body):
+        observed.append((transport, body))
 
     async def on_thinking(delta):
         thinking.append(delta)
@@ -402,7 +406,7 @@ async def test_codex_continues_attachment_and_tool_turns_without_replaying_histo
         tool_progress.append(delta)
 
     first = await provider.chat_stream(
-        messages, provider_context=_context(), on_thinking_delta=on_thinking,
+        messages, provider_context=_context(observe_codex_payload=observe), on_thinking_delta=on_thinking,
         on_tool_call_delta=on_tool,
     )
     assert first.finish_reason == "stop"
@@ -411,7 +415,7 @@ async def test_codex_continues_attachment_and_tool_turns_without_replaying_histo
     assert tool_progress[0]["call_id"] == "call_1"
     assert first.usage.total_tokens == 15
     tool_output = [{"role": "tool", "tool_call_id": first.tool_calls[0].id, "content": "PDF extracted text"}]
-    second = await provider.chat(_messages(), provider_context=_context(first, tool_output))
+    second = await provider.chat(_messages(), provider_context=_context(first, tool_output, observe_codex_payload=observe))
     third = await provider.chat(
         _messages("Summarize [Attachment: /workspace/report.pdf]"),
         provider_context=_context(second, [{"role": "user", "content": "Summarize [Attachment: /workspace/report.pdf]"}]),
@@ -419,6 +423,7 @@ async def test_codex_continues_attachment_and_tool_turns_without_replaying_histo
     assert third.content == "answer"
     assert len(server.peers) == 1
     bodies = [body for _, body in server.requests]
+    assert observed == [("Codex WebSocket", body) for body in bodies[:2]]
     assert bodies[0]["type"] == "response.create"
     assert bodies[0]["store"] is False
     assert "stream" not in bodies[0]
@@ -573,13 +578,19 @@ async def test_codex_cancelled_stream_closes_socket_before_next_request(codex_pe
 async def test_codex_unsupported_upgrade_uses_sticky_http_full_replay(codex_peer):
     provider, server, _ = codex_peer
     server.reject_upgrade = True
-    first = await provider.chat(_messages(), provider_context=_context())
-    second = await provider.chat(_messages("next"), provider_context=_context(first))
+    observed = []
+
+    async def observe(transport, body):
+        observed.append((transport, body))
+
+    first = await provider.chat(_messages(), provider_context=_context(observe_codex_payload=observe))
+    second = await provider.chat(_messages("next"), provider_context=_context(first, observe_codex_payload=observe))
     assert first.content == second.content == "answer"
     assert server.upgrade_attempts == 1
     assert len(server.http_requests) == 2
     assert len(server.http_requests[1]["input"]) == 3
     assert all("previous_response_id" not in body for body in server.http_requests)
+    assert observed == [("Codex HTTP", body) for body in server.http_requests]
 
 
 async def test_codex_rejected_handshake_accepts_repeated_response_headers(codex_peer):
