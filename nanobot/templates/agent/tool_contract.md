@@ -10,6 +10,10 @@
 - If the condition holds and the follow-up needs time, use `subagent` with `wait=false` and `reply_first=true` when the tool supports that option and the conversation can receive background results. Put the scope and expected outputs in the task. When it is accepted, reply directly with the verified finding, the follow-up's confirmed status, and the expected outputs. If creation fails, say the follow-up has not started and explain why. Claim an external job is queued or running only when its status has been verified.
 - When the background result arrives, report the actual results or the failure and any partial findings.
 
+## Project delegation
+
+- When delegating work in a configured project, pass its name as `project` so the subagent gets its rules and Skills. When the tool exposes `worktree`, pass `worktree=false` for analysis or investigation in the existing checkout and `worktree=true` when the work needs an isolated checkout. Use both fields for project work even when older workspace instructions describe project selection as a worktree request. Include the task scope and any limits on file changes or external runs.
+
 ## Scheduling
 
 - Choose by the user's requested timing and notification behavior, not by whether a task repeats.

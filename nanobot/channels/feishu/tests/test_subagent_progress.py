@@ -14,7 +14,7 @@ async def test_project_progress_reaches_private_chat_once_per_stage_and_stops_at
     ctx = RuntimeEventContext(channel="feishu.product", chat_id="ou_user", session_key="feishu.product:ou_user")
     status = SubagentStatus(
         task_id="task", owner=ctx.session_key, label="LOC-42", task_description="Edit a project",
-        started_at=0, project="location", state="running", phase="preparing_worktree",
+        started_at=0, project="location", worktree_id="task", state="running", phase="preparing_worktree",
     )
     event = SubagentTaskChanged(context=ctx, task_id=status.task_id)
     live = True

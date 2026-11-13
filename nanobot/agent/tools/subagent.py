@@ -31,7 +31,13 @@ if TYPE_CHECKING:
     ),
     task=StringSchema("Required for create: the task for the subagent to complete.", min_length=1),
     label=StringSchema("Display label for create."),
-    project=StringSchema("For create: a gateway-configured project name for an isolated Git worktree."),
+    project=StringSchema("For create: a gateway-configured project whose rules, skills, and working directory apply."),
+    worktree=BooleanSchema(
+        description=(
+            "For a project create: false uses the existing repository checkout; true uses an isolated Git worktree. "
+            "Set this explicitly. If omitted, projects with a worktree script use a worktree for compatibility."
+        ),
+    ),
     resume_task_id=StringSchema(
         "For a project create: full ID of a finished task in this conversation whose worktree should be reused."
     ),
@@ -100,12 +106,13 @@ class SubagentTool(Tool):
         self, action: str, task_id: str | None = None, message: str | None = None,
         task: str | None = None, label: str | None = None,
         temperature: float | None = None, wait: bool = False,
-        project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False, **kwargs: Any,
+        project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False,
+        worktree: bool | None = None, **kwargs: Any,
     ) -> str:
         if action == "create":
             if not task or not task.strip():
                 return ToolResult.error("Error: create requires a non-empty task")
-            return await self._create_task(task, label, temperature, wait, project, resume_task_id, reply_first)
+            return await self._create_task(task, label, temperature, wait, project, resume_task_id, reply_first, worktree)
         owner = current_request_session_key()
         try:
             if action == "check":
@@ -131,6 +138,7 @@ class SubagentTool(Tool):
     async def _create_task(
         self, task: str, label: str | None, temperature: float | None, wait: bool,
         project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False,
+        worktree: bool | None = None,
     ) -> str:
         request_ctx = current_request_context()
         if request_ctx is None or request_ctx.runtime is None:
@@ -145,13 +153,9 @@ class SubagentTool(Tool):
         inline = wait or not request_ctx.can_receive_background_results or not request_ctx.persist_session
         if reply_first and inline:
             return ToolResult.error("Error: reply_first requires wait=false and background result delivery")
-        if project is not None and (inline or request_ctx.metadata.get("chat_type") != "p2p"):
-            return ToolResult.error("Error: project tasks require a persistent Feishu private chat and wait=false")
-        if resume_task_id is not None and project is None:
-            return ToolResult.error("Error: resume_task_id requires a configured project")
-        method = self._manager.run_inline if inline else partial(
-            self._manager.spawn, project=project, resume_task_id=resume_task_id, reply_first=reply_first,
-        )
+        if project is not None and request_ctx.metadata.get("chat_type") != "p2p":
+            return ToolResult.error("Error: project tasks require a persistent Feishu private chat")
+        method = self._manager.run_inline if inline else partial(self._manager.spawn, reply_first=reply_first)
         return await method(
             task=task,
             runtime=request_ctx.runtime,
@@ -163,6 +167,9 @@ class SubagentTool(Tool):
             origin_turn_id=request_ctx.turn_id,
             temperature=temperature,
             workspace_scope=current_workspace_scope(),
+            project=project,
+            worktree=worktree,
+            resume_task_id=resume_task_id,
             session_policy=SessionPolicy(
                 persist=request_ctx.persist_session,
                 log_content=request_ctx.log_content,

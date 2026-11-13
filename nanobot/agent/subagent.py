@@ -604,7 +604,7 @@ class SubagentManager:
         runtime: LLMRuntime | None, *, announce: bool, origin_turn_id: str | None,
         session_policy: SessionPolicy | None,
         project: str | None = None, resume_task_id: str | None = None,
-        reply_first: bool = False,
+        reply_first: bool = False, worktree: bool | None = None,
     ) -> _SubagentTask:
         self.bus.admission.check()
         if runtime is None:
@@ -618,16 +618,28 @@ class SubagentManager:
         task_id = str(uuid.uuid4())
         project_config = None
         worktree_id = None
+        if project is None and (worktree or resume_task_id is not None):
+            raise SubagentControlError("a worktree requires a configured project")
         if project is not None:
             project_config = self.tools_config.subagent.projects.get(project)
             if (
                 project_config is None or project_config.feishu_session != owner
                 or owner != f"{origin_channel}:{origin_chat_id}"
-                or not announce or self.sessions is None
+                or self.sessions is None
                 or (session_policy is not None and not session_policy.persist)
             ):
                 raise SubagentControlError("project is unavailable in this conversation")
-            worktree_id = task_id
+            use_worktree = worktree if worktree is not None else (
+                resume_task_id is not None or project_config.worktree_script is not None
+            )
+            if resume_task_id is not None and not use_worktree:
+                raise SubagentControlError("resume_task_id requires a worktree")
+            if use_worktree:
+                if not announce:
+                    raise SubagentControlError("worktree tasks require background execution with wait=false")
+                if resume_task_id is None and project_config.worktree_script is None:
+                    raise SubagentControlError("no worktree setup script is configured for this project")
+                worktree_id = task_id
             if resume_task_id is not None:
                 previous = self._owned_status(resume_task_id, owner)
                 if (
@@ -636,9 +648,10 @@ class SubagentManager:
                 ):
                     raise SubagentControlError("a finished project task with a prepared worktree is required")
                 worktree_id = previous.worktree_id
-            if self._worktree_in_use(worktree_id):
-                raise SubagentControlError("the project worktree already has a task in progress")
-            self._admitting_worktrees.add(worktree_id)
+            if worktree_id is not None:
+                if self._worktree_in_use(worktree_id):
+                    raise SubagentControlError("the project worktree already has a task in progress")
+                self._admitting_worktrees.add(worktree_id)
         status = SubagentStatus(
             task_id=task_id,
             revision=1,
@@ -717,13 +730,15 @@ class SubagentManager:
         project: str | None = None,
         resume_task_id: str | None = None,
         reply_first: bool = False,
+        worktree: bool | None = None,
     ) -> str:
         """Start background work and route its terminal result to the parent."""
         try:
             record = await self._create_task(
                 task, label, origin_channel, origin_chat_id, session_key,
                 origin_message_id, temperature, workspace_scope, runtime, announce=True, origin_turn_id=origin_turn_id,
-                session_policy=session_policy, project=project, resume_task_id=resume_task_id, reply_first=reply_first,
+                session_policy=session_policy, project=project, resume_task_id=resume_task_id,
+                reply_first=reply_first, worktree=worktree,
             )
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
@@ -734,7 +749,7 @@ class SubagentManager:
                 "Reply now with the verified findings, follow-up status, and expected output. "
                 "The task result will arrive in a separate turn. Don't duplicate its work."
             )
-        if status.project is not None:
+        if status.worktree_id is not None:
             return (f"Subagent [{status.label}] queued (id: {status.task_id}). "
                     "The worktree will be prepared when it runs. I'll notify you when it completes.")
         return (f"Subagent [{status.label}] started (id: {status.task_id}). "
@@ -754,13 +769,16 @@ class SubagentManager:
         runtime: LLMRuntime | None = None,
         origin_turn_id: str | None = None,
         session_policy: SessionPolicy | None = None,
+        project: str | None = None,
+        worktree: bool | None = None,
+        resume_task_id: str | None = None,
     ) -> str:
         """Wait for the same task lifecycle without a background notice."""
         try:
             record = await self._create_task(
                 task, label, origin_channel, origin_chat_id, session_key,
                 origin_message_id, temperature, workspace_scope, runtime, announce=False, origin_turn_id=origin_turn_id,
-                session_policy=session_policy,
+                session_policy=session_policy, project=project, worktree=worktree, resume_task_id=resume_task_id,
             )
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
@@ -827,30 +845,35 @@ class SubagentManager:
             async with self._run_slots:
                 record.raise_if_stopping()
                 status.state = "running"
-                status.phase = "preparing_worktree" if record.project_config is not None else "initializing"
+                status.phase = "preparing_worktree" if status.worktree_id is not None else "initializing"
                 await self._save_status(status)
                 record.raise_if_stopping()
                 if record.project_config is not None:
-                    assert status.worktree_id is not None
-                    # A new checkout has no retained task history. A resumed checkout
-                    # shares its path with the retention scan until preparation ends.
-                    async with self._worktree_lock if record.resume_project else nullcontext():
-                        worktree = await prepare_project_worktree(
-                            record.project_config, self.workspace, status.worktree_id,
-                            resume=record.resume_project,
-                        )
-                    record.raise_if_stopping()
+                    if status.worktree_id is not None:
+                        # A resumed checkout shares its path with the retention scan until preparation ends.
+                        async with self._worktree_lock if record.resume_project else nullcontext():
+                            worktree = await prepare_project_worktree(
+                                record.project_config, self.workspace, status.worktree_id,
+                                resume=record.resume_project,
+                            )
+                        record.raise_if_stopping()
+                        project_root = worktree.path
+                        status.worktree = str(worktree.path)
+                        status.branch = worktree.branch
+                        status.phase = "worktree_ready"
+                    else:
+                        project_root = record.project_config.repository.expanduser().resolve(strict=True)
+                        if not project_root.is_dir():
+                            raise RuntimeError("Configured project repository is not a directory")
                     parent_scope = record.workspace_scope
                     record.workspace_scope = build_workspace_scope(
-                        worktree.path,
+                        project_root,
                         parent_scope.access_mode if parent_scope else default_access_mode(self.restrict_to_workspace),
                         source_channel=parent_scope.source_channel if parent_scope else None,
                     )
-                    status.worktree = str(worktree.path)
-                    status.branch = worktree.branch
-                    status.phase = "worktree_ready"
-                    await self._save_status(status)
-                    record.raise_if_stopping()
+                    if status.worktree_id is not None:
+                        await self._save_status(status)
+                        record.raise_if_stopping()
                 outcome = await self._run_admitted_subagent(record)
                 record.decide(outcome)
         except asyncio.CancelledError:
@@ -903,19 +926,20 @@ class SubagentManager:
         project_skill_roots: tuple[Path, ...] = ()
         repository_skill_roots: tuple[Path, ...] = ()
         if record.project_config is not None:
-            worktree_skills = project_skill_root(root)
+            checkout_skills = project_skill_root(root)
             repository_skills = project_skill_root(record.project_config.repository)
             project_skill_roots = tuple(dict.fromkeys(
-                path for path in (worktree_skills, repository_skills) if path is not None
+                path for path in (checkout_skills, repository_skills) if path is not None
             ))
-            if repository_skills is not None and repository_skills != worktree_skills:
+            if repository_skills is not None and repository_skills != checkout_skills:
                 repository_skill_roots = (repository_skills,)
         # Construct from the agent workspace; the bound scope below supplies the project cwd.
         tools = self._build_tools(
             tools_config=cfg, exec_manager=record.exec_manager, repository_skill_roots=repository_skill_roots,
         )
         system_prompt = self._build_subagent_prompt(
-            workspace=root, project=status.project is not None, project_skill_roots=project_skill_roots,
+            workspace=root, project=status.project is not None, worktree=status.worktree is not None,
+            project_skill_roots=project_skill_roots,
         )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
@@ -1103,6 +1127,7 @@ class SubagentManager:
         workspace: Path | None = None,
         *,
         project: bool = False,
+        worktree: bool = False,
         project_skill_roots: tuple[Path, ...] = (),
     ) -> str:
         agent_workspace = self.workspace.expanduser().resolve()
@@ -1124,6 +1149,7 @@ class SubagentManager:
             history_log=history_log,
             skills_summary=skills_summary or "",
             project=project,
+            worktree=worktree,
             project_instructions=load_project_instructions(project_workspace) if project else "",
         )
 

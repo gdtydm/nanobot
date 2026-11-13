@@ -7,7 +7,7 @@ Stay focused on the assigned task. Your final response will be reported back to 
 
 ## Workspace
 {% if project %}
-Project worktree: {{ workspace }}
+{% if worktree %}Project worktree{% else %}Project repository{% endif %}: {{ workspace }}
 Use nanobot's file and shell tools to perform the task. For this workflow, execute the work yourself and do not delegate execution to another coding agent or launch Codex. If root project instructions are shown below, use them directly. Load relevant subdirectory rules only as needed.
 {% endif %}
 {% if agent_workspace != workspace %}

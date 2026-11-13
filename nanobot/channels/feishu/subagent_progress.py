@@ -21,7 +21,7 @@ _MILESTONES = {
 
 
 def _stage(status: SubagentStatus, previous: Stage | None = None) -> Stage | None:
-    if not status.project or status.reply_first:
+    if status.worktree_id is None or status.reply_first:
         return None
     if status.state == "queued":
         return "queued"

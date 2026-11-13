@@ -15,7 +15,7 @@ class SubagentProjectConfig(Base):
     """Local gateway policy for a project worker and its Feishu owner."""
 
     repository: Path
-    worktree_script: Path
+    worktree_script: Path | None = None
     feishu_session: FeishuPrivateSession
 
 

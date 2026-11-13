@@ -18,6 +18,7 @@ from nanobot.agent.subagent_project import (
 )
 from nanobot.agent.subagent_status import SubagentStatus
 from nanobot.agent.tools.context import RequestContext, request_context
+from nanobot.agent.tools.registry import is_tool_error_result
 from nanobot.agent.tools.subagent import SubagentTool
 from nanobot.agent.tools.subagent_config import SubagentProjectConfig, SubagentToolConfig
 from nanobot.bus.queue import MessageBus
@@ -34,6 +35,78 @@ from nanobot.utils.llm_runtime import LLMRuntime
 
 OWNER = "feishu:ou_owner"
 PROJECT = "tiktok_location_offline"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait", [False, True], ids=["background", "inline"])
+async def test_project_task_can_use_existing_checkout(tmp_path, wait):
+    workspace = tmp_path / "agent"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("BASE_RULE")
+    (repo / "AGENTS.override.md").write_text("ANALYSIS_RULE")
+    (repo / "analysis-guide.md").write_text("ANALYSIS_GUIDE")
+    skill = repo / ".agents/skills/evaluation/SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: evaluation\ndescription: Compare project metrics\n---\nEVAL_WORKFLOW")
+    sessions = SessionManager(workspace, sessions_root=tmp_path / "sessions")
+    manager = SubagentManager(
+        workspace=workspace, bus=MessageBus(), max_tool_result_chars=16_000,
+        consolidator=MagicMock(spec=Consolidator), session_manager=sessions,
+        tools_config=ToolsConfig(subagent=SubagentToolConfig(projects={PROJECT: SubagentProjectConfig(
+            repository=repo, worktree_script=None if wait else tmp_path / "unused-worktree-script", feishu_session=OWNER,
+        )})),
+    )
+    provider = MagicMock(spec=LLMProvider)
+    provider.generation = GenerationSettings()
+    runtime = LLMRuntime.capture(provider, "test", context_window_tokens=128_000)
+    parent = await sessions.state.get(OWNER)
+    parent.add_message("user", "Compare project metrics")
+    await sessions.state.finish_turn(parent)
+    tool = SubagentTool(manager)
+
+    async def execute(spec):
+        assert spec.workspace == repo
+        scope = current_workspace_scope()
+        assert scope is not None and scope.project_path == repo and scope.restrict_to_workspace
+        prompt = spec.initial_messages[0]["content"]
+        assert f"Project repository: {repo}" in prompt
+        assert "ANALYSIS_RULE" in prompt and "BASE_RULE" not in prompt
+        assert "Compare project metrics" in prompt
+        read = spec.tools.get("read_file")
+        assert read is not None
+        assert "ANALYSIS_GUIDE" in str(await read.execute(path="analysis-guide.md"))
+        assert "EVAL_WORKFLOW" in str(await read.execute(path=".agents/skills/evaluation/SKILL.md"))
+        return AgentRunResult(messages=[], final_content="Verified project metrics")
+
+    manager.runner.run = execute
+    token = bind_workspace_scope(default_workspace_scope(workspace, True))
+    try:
+        with request_context(RequestContext(
+            channel="feishu", chat_id="ou_other", session_key="feishu:ou_other",
+            runtime=runtime, metadata={"chat_type": "p2p"},
+        )):
+            denied = await tool.execute(action="create", task="Compare metrics", project=PROJECT, worktree=False)
+        assert is_tool_error_result(denied)
+        with request_context(RequestContext(
+            channel="feishu", chat_id="ou_owner", session_key=OWNER,
+            runtime=runtime, metadata={"chat_type": "p2p"},
+        )):
+            arguments = {} if wait else {"worktree": False}
+            result = await tool.execute(action="create", task="Compare metrics", project=PROJECT, wait=wait, **arguments)
+        if wait:
+            assert result == "Verified project metrics"
+        else:
+            assert not is_tool_error_result(result)
+            event = await asyncio.wait_for(manager.bus.consume_inbound(), 10)
+            assert event.session_key == OWNER and "Verified project metrics" in event.content
+        status, = manager.statuses_for_session(OWNER).values()
+        assert status.state == "done" and status.project == PROJECT
+        assert status.worktree is None and status.worktree_id is None
+        assert not (workspace / "location-tasks").exists()
+    finally:
+        reset_workspace_scope(token)
+        await manager.close()
 
 
 @pytest.mark.asyncio
@@ -139,7 +212,7 @@ async def test_feishu_project_tasks_use_distinct_worktrees_and_resume_their_own(
 
     try:
         assert "unavailable" in await start("FOREIGN", owner="feishu:ou_other")
-        first = await start("LOC-1")
+        first = await start("LOC-1", worktree=True)
         second = await start("LOC-2")
         first_id, = re.findall(r"id: ([a-f0-9-]+)", first)
         second_id, = re.findall(r"id: ([a-f0-9-]+)", second)

@@ -155,6 +155,8 @@ async def prepare_project_worktree(
     if restoring.is_symlink():
         raise RuntimeError("Project worktree recovery marker must not be a symlink")
     if not resume:
+        if config.worktree_script is None:
+            raise RuntimeError("No worktree setup script is configured for this project")
         script = config.worktree_script.expanduser().resolve(strict=True)
         if not repository.is_dir() or not script.is_file():
             raise RuntimeError("Project repository or worktree script is invalid")
