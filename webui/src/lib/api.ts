@@ -758,6 +758,72 @@ export async function fetchSubagentThread(
   return parseWebuiThreadPayload(payload);
 }
 
+export interface SubagentTraceRequest {
+  index: number;
+  id: string;
+  model: string;
+  transport: string;
+  created_at_ms: number;
+  truncated: boolean;
+}
+
+export interface SubagentTraceTool {
+  index: number;
+  id: string;
+  name: string;
+  phase: string;
+  target: string;
+}
+
+export interface SubagentTraceIndex {
+  sources: string[];
+  requests: SubagentTraceRequest[];
+  tools: SubagentTraceTool[];
+}
+
+export interface SubagentTraceDetail {
+  body: string;
+  truncated: boolean;
+}
+
+function subagentTracePath(sessionKey: string, taskId: string): string {
+  return `/api/sessions/${encodeURIComponent(sessionKey)}/subagents/${encodeURIComponent(taskId)}/trace`;
+}
+
+export async function fetchSubagentTrace(
+  token: string, sessionKey: string, taskId: string, signal: AbortSignal,
+): Promise<SubagentTraceIndex> {
+  const payload = await request<unknown>(
+    subagentTracePath(sessionKey, taskId), token, { signal, cache: "no-store" }, API_READ_TIMEOUT_MS,
+  );
+  if (!isRecord(payload) || !Array.isArray(payload.sources) || !payload.sources.every((value) => typeof value === "string")
+    || !Array.isArray(payload.requests) || !payload.requests.every((row) => isRecord(row)
+      && Number.isSafeInteger(row.index) && typeof row.id === "string" && typeof row.model === "string"
+      && typeof row.transport === "string"
+      && typeof row.created_at_ms === "number" && typeof row.truncated === "boolean")
+    || !Array.isArray(payload.tools) || !payload.tools.every((row) => isRecord(row)
+      && Number.isSafeInteger(row.index) && typeof row.id === "string" && typeof row.name === "string"
+      && typeof row.phase === "string" && typeof row.target === "string")) {
+    throw new Error("Invalid subagent trace response");
+  }
+  return { sources: payload.sources, requests: payload.requests, tools: payload.tools };
+}
+
+export async function fetchSubagentTraceDetail(
+  token: string, sessionKey: string, taskId: string, entry: SubagentTraceRequest | SubagentTraceTool, signal: AbortSignal,
+): Promise<SubagentTraceDetail> {
+  const query = new URLSearchParams("model" in entry
+    ? { request: String(entry.index) }
+    : { tool: String(entry.index), id: entry.id });
+  const payload = await request<unknown>(
+    `${subagentTracePath(sessionKey, taskId)}?${query}`, token, { signal, cache: "no-store" }, API_READ_TIMEOUT_MS,
+  );
+  if (!isRecord(payload) || typeof payload.body !== "string" || typeof payload.truncated !== "boolean") {
+    throw new Error("Invalid subagent trace detail response");
+  }
+  return { body: payload.body, truncated: payload.truncated };
+}
+
 export async function cancelSubagentTask(
   transport: WebUIMutationTransport, sessionKey: string, taskId: string,
 ): Promise<SubagentTaskSnapshot> {

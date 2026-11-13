@@ -27,10 +27,11 @@ function timestampLabel(value: string | number | null): string {
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
 }
 
-export function ConversationsDialog({ getToken, onClose, showTaskHistory = false }: {
+export function ConversationsDialog({ getToken, onClose, showTaskHistory = false, showTaskTrace = false }: {
   getToken: () => string;
   onClose: () => void;
   showTaskHistory?: boolean;
+  showTaskTrace?: boolean;
 }) {
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<ConversationSummary[] | null>(null);
@@ -62,7 +63,8 @@ export function ConversationsDialog({ getToken, onClose, showTaskHistory = false
           <DialogDescription>{t("conversations.description")}</DialogDescription>
         </DialogHeader>
         {selected ? (
-          <ConversationThread key={selected.key} session={selected} getToken={getToken} showTaskHistory={showTaskHistory}
+          <ConversationThread key={selected.key} session={selected} getToken={getToken}
+            showTaskHistory={showTaskHistory} showTaskTrace={showTaskTrace}
             onBack={() => { setSelected(null); setError(false); }} />
         ) : (
           <div className="flex min-h-0 flex-col gap-3">
@@ -98,11 +100,12 @@ export function ConversationsDialog({ getToken, onClose, showTaskHistory = false
   );
 }
 
-function ConversationThread({ session, getToken, onBack, showTaskHistory }: {
+function ConversationThread({ session, getToken, onBack, showTaskHistory, showTaskTrace }: {
   session: ConversationSummary;
   getToken: () => string;
   onBack: () => void;
   showTaskHistory: boolean;
+  showTaskTrace: boolean;
 }) {
   const { t } = useTranslation();
   const [page, setPage] = useState<ConversationPage | null>(null);
@@ -136,7 +139,8 @@ function ConversationThread({ session, getToken, onBack, showTaskHistory }: {
   };
 
   if (showTasks) {
-    return <ConversationTasks sessionKey={session.key} getToken={getToken} onBack={() => setShowTasks(false)} />;
+    return <ConversationTasks sessionKey={session.key} getToken={getToken} showTaskTrace={showTaskTrace}
+      onBack={() => setShowTasks(false)} />;
   }
 
   return (
@@ -173,10 +177,11 @@ function ConversationThread({ session, getToken, onBack, showTaskHistory }: {
   );
 }
 
-function ConversationTasks({ sessionKey, getToken, onBack }: {
+function ConversationTasks({ sessionKey, getToken, onBack, showTaskTrace }: {
   sessionKey: string;
   getToken: () => string;
   onBack: () => void;
+  showTaskTrace: boolean;
 }) {
   const { t } = useTranslation();
   const [tasks, setTasks] = useState<SubagentTaskSnapshot[] | null>(null);
@@ -210,8 +215,8 @@ function ConversationTasks({ sessionKey, getToken, onBack }: {
         {!tasks && !error && <p role="status" className="text-sm text-muted-foreground">{t("conversations.loading")}</p>}
         {tasks?.length === 0 && <p className="text-sm text-muted-foreground">{t("conversations.noTasks")}</p>}
         {task ? (
-          <SubagentThread key={`${task.task_id}:${refresh}`} token={getToken()} sessionKey={sessionKey} task={task}
-            historyEnabled isStreaming={isActiveSubagentTask(task)} />
+          <SubagentThread key={task.task_id} token={getToken()} sessionKey={sessionKey} task={task}
+            historyEnabled traceEnabled={showTaskTrace} refreshRevision={refresh} isStreaming={isActiveSubagentTask(task)} />
         ) : (
           <ul className="divide-y divide-border">
             {tasks?.map((row) => (

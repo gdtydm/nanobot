@@ -439,6 +439,24 @@
     "closeAction": "임시 채팅 닫기: {{title}}"
   },
   "conversations": {
+    "trace": {
+      "title": "실행 세부 정보",
+      "tools": "도구 호출",
+      "requests": "모델 요청",
+      "search": "도구, 경로 또는 명령 검색",
+      "sources": "자동으로 불러온 파일",
+      "scope": "nanobot이 준비한 입력과 Codex 공급자가 전송한 HTTP 본문 또는 WebSocket 프레임을 표시합니다.",
+      "noRequests": "이 작업에 저장된 요청 스냅샷이 없습니다.",
+      "noTools": "이 작업에 저장된 도구 호출이 없습니다.",
+      "noMatches": "일치하는 도구 호출이 없습니다.",
+      "more": "더 보기",
+      "truncated": "이 항목은 일부만 표시됩니다.",
+      "phase": {
+        "start": "실행 중",
+        "end": "완료",
+        "error": "실패"
+      }
+    },
     "noTasks": "이 대화에 저장된 하위 작업이 없습니다.",
     "title": "대화 기록",
     "description": "이 호스트에 저장된 채널별 대화를 확인합니다.",

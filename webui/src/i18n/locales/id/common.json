@@ -439,6 +439,24 @@
     "closeAction": "Tutup obrolan sementara: {{title}}"
   },
   "conversations": {
+    "trace": {
+      "title": "Detail eksekusi",
+      "tools": "Pemanggilan alat",
+      "requests": "Permintaan model",
+      "search": "Cari alat, jalur, atau perintah",
+      "sources": "File yang dimuat otomatis",
+      "scope": "Menampilkan input yang disiapkan nanobot serta isi HTTP atau bingkai WebSocket yang dikirim penyedia Codex.",
+      "noRequests": "Tidak ada permintaan yang disimpan untuk tugas ini.",
+      "noTools": "Tidak ada pemanggilan alat yang disimpan untuk tugas ini.",
+      "noMatches": "Tidak ada pemanggilan alat yang cocok.",
+      "more": "Tampilkan lebih banyak",
+      "truncated": "Entri ini dipotong.",
+      "phase": {
+        "start": "Berjalan",
+        "end": "Selesai",
+        "error": "Gagal"
+      }
+    },
     "noTasks": "Belum ada subtugas tersimpan untuk percakapan ini.",
     "title": "Riwayat percakapan",
     "description": "Lihat pesan dari semua kanal yang tersimpan di host ini.",

@@ -439,6 +439,24 @@
     "closeAction": "關閉臨時聊天：{{title}}"
   },
   "conversations": {
+    "trace": {
+      "title": "執行詳情",
+      "tools": "工具呼叫",
+      "requests": "模型請求",
+      "search": "搜尋工具、路徑或指令",
+      "sources": "自動載入的檔案",
+      "scope": "查看 nanobot 準備的上下文，以及 Codex 供應商實際送出的 HTTP 請求主體或 WebSocket 訊框。",
+      "noRequests": "此任務未儲存模型請求快照。",
+      "noTools": "此任務未儲存工具呼叫。",
+      "noMatches": "沒有符合的工具呼叫。",
+      "more": "顯示更多",
+      "truncated": "此筆記錄已截斷。",
+      "phase": {
+        "start": "執行中",
+        "end": "已完成",
+        "error": "失敗"
+      }
+    },
     "noTasks": "此對話還沒有子任務紀錄。",
     "title": "對話紀錄",
     "description": "查看此主機儲存的各管道對話。",

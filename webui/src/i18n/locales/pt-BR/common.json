@@ -439,6 +439,24 @@
     "closeAction": "Fechar chat temporário: {{title}}"
   },
   "conversations": {
+    "trace": {
+      "title": "Detalhes da execução",
+      "tools": "Chamadas de ferramentas",
+      "requests": "Solicitações ao modelo",
+      "search": "Buscar ferramentas, caminhos ou comandos",
+      "sources": "Arquivos carregados automaticamente",
+      "scope": "Mostra as entradas preparadas pelo nanobot e os corpos HTTP ou quadros WebSocket enviados pelo provedor Codex.",
+      "noRequests": "Nenhuma solicitação foi salva para esta tarefa.",
+      "noTools": "Nenhuma chamada de ferramenta foi salva para esta tarefa.",
+      "noMatches": "Nenhuma chamada de ferramenta corresponde à busca.",
+      "more": "Mostrar mais",
+      "truncated": "Esta entrada foi truncada.",
+      "phase": {
+        "start": "Em execução",
+        "end": "Concluída",
+        "error": "Falhou"
+      }
+    },
     "noTasks": "Esta conversa não tem subtarefas salvas.",
     "title": "Histórico de conversas",
     "description": "Veja as mensagens salvas neste host em todos os canais.",

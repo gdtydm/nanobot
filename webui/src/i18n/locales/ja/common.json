@@ -439,6 +439,24 @@
     "closeAction": "一時チャット「{{title}}」を閉じる"
   },
   "conversations": {
+    "trace": {
+      "title": "実行の詳細",
+      "tools": "ツール呼び出し",
+      "requests": "モデルリクエスト",
+      "search": "ツール、パス、コマンドを検索",
+      "sources": "自動読み込みしたファイル",
+      "scope": "nanobot が準備した入力と、Codex プロバイダーが送信した HTTP 本文や WebSocket フレームを表示します。",
+      "noRequests": "このタスクのリクエストは保存されていません。",
+      "noTools": "このタスクのツール呼び出しは保存されていません。",
+      "noMatches": "一致するツール呼び出しはありません。",
+      "more": "さらに表示",
+      "truncated": "この記録は途中で切り詰められています。",
+      "phase": {
+        "start": "実行中",
+        "end": "完了",
+        "error": "失敗"
+      }
+    },
     "noTasks": "この会話に保存されたサブタスクはありません。",
     "title": "会話履歴",
     "description": "このホストに保存された各チャンネルの会話を表示します。",

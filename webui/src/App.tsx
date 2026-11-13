@@ -2537,7 +2537,8 @@ function Shell({
           {conversationsOpen && localActive && !managingConnections && conversationsSupported && (
             <Suspense fallback={null}>
               <ConversationsDialog getToken={getToken} onClose={() => setConversationsOpen(false)}
-                showTaskHistory={webuiCapabilities.includes("webui.conversations.tasks.read.v1")} />
+                showTaskHistory={webuiCapabilities.includes("webui.conversations.tasks.read.v1")}
+                showTaskTrace={webuiCapabilities.includes("webui.subagents.trace.read.v1")} />
             </Suspense>
           )}
         <main ref={managementMain}

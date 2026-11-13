@@ -439,6 +439,24 @@
     "closeAction": "Đóng trò chuyện tạm thời: {{title}}"
   },
   "conversations": {
+    "trace": {
+      "title": "Chi tiết thực thi",
+      "tools": "Lượt gọi công cụ",
+      "requests": "Yêu cầu gửi mô hình",
+      "search": "Tìm công cụ, đường dẫn hoặc lệnh",
+      "sources": "Tệp được tự động nạp",
+      "scope": "Hiển thị đầu vào do nanobot chuẩn bị và nội dung HTTP hoặc khung WebSocket do nhà cung cấp Codex gửi.",
+      "noRequests": "Không có bản ghi yêu cầu nào được lưu cho tác vụ này.",
+      "noTools": "Không có lượt gọi công cụ nào được lưu cho tác vụ này.",
+      "noMatches": "Không tìm thấy lượt gọi công cụ phù hợp.",
+      "more": "Hiện thêm",
+      "truncated": "Mục này đã bị cắt bớt.",
+      "phase": {
+        "start": "Đang chạy",
+        "end": "Hoàn tất",
+        "error": "Thất bại"
+      }
+    },
     "noTasks": "Cuộc trò chuyện này chưa có nhiệm vụ con đã lưu.",
     "title": "Lịch sử trò chuyện",
     "description": "Xem tin nhắn đã lưu trên máy chủ này từ mọi kênh.",

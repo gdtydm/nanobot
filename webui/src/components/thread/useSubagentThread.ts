@@ -6,11 +6,12 @@ import { projectWebuiThreadMessages } from "@/lib/thread-display-projection";
 import { projectThreadEvents } from "@/lib/thread-event-projection";
 import type { SubagentTaskSnapshot, UIMessage, WebuiThreadPersistedPayload } from "@/lib/types";
 
-export function useSubagentThread({ token, sessionKey, task, historyEnabled }: {
+export function useSubagentThread({ token, sessionKey, task, historyEnabled, refreshRevision }: {
   token: string;
   sessionKey: string;
   task: SubagentTaskSnapshot;
   historyEnabled: boolean;
+  refreshRevision?: number;
 }) {
   const pageVisible = usePageVisibility();
   const [thread, setThread] = useState<WebuiThreadPersistedPayload | null>(null);
@@ -48,7 +49,7 @@ export function useSubagentThread({ token, sessionKey, task, historyEnabled }: {
   // Task revisions already arrive through the owning chat's event stream.
   useEffect(() => {
     refreshRef.current?.();
-  }, [historyEnabled, pageVisible, sessionKey, taskId, task.revision, token]);
+  }, [historyEnabled, pageVisible, refreshRevision, sessionKey, taskId, task.revision, token]);
 
   const messages = useMemo(() => {
     if (historyEnabled) return thread ? projectWebuiThreadMessages(projectThreadEvents(thread.events)) : [];

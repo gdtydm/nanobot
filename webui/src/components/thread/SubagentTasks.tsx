@@ -47,11 +47,12 @@ interface SubagentTasksProviderProps {
   enabled: boolean;
   liveEvents: boolean;
   historyEnabled?: boolean;
+  traceEnabled?: boolean;
   active?: boolean;
   children: ReactNode;
 }
 
-export function SubagentTasksProvider({ client, sessionKey, token, enabled, liveEvents, historyEnabled = false, active = true, children }: SubagentTasksProviderProps) {
+export function SubagentTasksProvider({ client, sessionKey, token, enabled, liveEvents, historyEnabled = false, traceEnabled = false, active = true, children }: SubagentTasksProviderProps) {
   const { t } = useTranslation("common");
   const pageVisible = usePageVisibility();
   const paneVisible = useThreadVisibility();
@@ -196,7 +197,7 @@ export function SubagentTasksProvider({ client, sessionKey, token, enabled, live
               {selected.error ? <p role="alert" className="whitespace-pre-wrap break-words text-destructive">{selected.error}</p> : null}
             </div> : null}
             <SubagentThread key={`${sessionKey}:${selected.task_id}`} token={token} sessionKey={sessionKey}
-              task={selected} historyEnabled={historyEnabled} isStreaming={isActiveSubagentTask(selected)} />
+              task={selected} historyEnabled={historyEnabled} traceEnabled={traceEnabled} isStreaming={isActiveSubagentTask(selected)} />
           </div> : null}
         </SheetContent>
       </Sheet>

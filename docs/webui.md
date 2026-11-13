@@ -94,6 +94,8 @@ Open **Conversation history** in the sidebar to browse saved conversations acros
 
 Choose **Subtasks** within a saved conversation to inspect its delegated work. Open a task to view its conversation and tool activity, and use **Refresh** to update the saved record.
 
+Open **Execution details** to search recorded tool calls by tool name, path, or command and expand their arguments and results. **Model requests** lists automatically loaded prompt files and the messages and tool definitions prepared for each request. The Codex provider also records its outgoing HTTP request bodies and WebSocket frames, including continuation requests. The gateway saves these snapshots for new persistent subtasks with content logging enabled. Older subtasks can still show their saved tool calls. Oversized details are marked as truncated.
+
 Drag topics within a sidebar group to reorder them. **Rename** edits a topic title in place; a failed save keeps the draft for retry.
 
 Use **Select** in a topic's action menu to archive or delete several topics with one confirmation. Click outside the topic rows and toolbar, or press **Esc**, to leave selection mode. Cancelling a confirmation keeps your selection. Archiving removes pins and hides topics from the default list while keeping their conversations. Use **Show archived** to find them again; selecting only archived topics offers **Unarchive**.

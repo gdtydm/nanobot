@@ -439,6 +439,24 @@
     "closeAction": "Fermer la discussion temporaire : {{title}}"
   },
   "conversations": {
+    "trace": {
+      "title": "Détails de l’exécution",
+      "tools": "Appels d’outils",
+      "requests": "Requêtes au modèle",
+      "search": "Rechercher un outil, un chemin ou une commande",
+      "sources": "Fichiers chargés automatiquement",
+      "scope": "Affiche les entrées préparées par nanobot et les corps HTTP ou trames WebSocket envoyés par le fournisseur Codex.",
+      "noRequests": "Aucune requête n’a été enregistrée pour cette tâche.",
+      "noTools": "Aucun appel d’outil n’a été enregistré pour cette tâche.",
+      "noMatches": "Aucun appel d’outil correspondant.",
+      "more": "Afficher plus",
+      "truncated": "Cette entrée a été tronquée.",
+      "phase": {
+        "start": "En cours",
+        "end": "Terminé",
+        "error": "Échec"
+      }
+    },
     "noTasks": "Aucune sous-tâche enregistrée pour cette conversation.",
     "title": "Historique des conversations",
     "description": "Consultez les messages enregistrés sur cet hôte, tous canaux confondus.",

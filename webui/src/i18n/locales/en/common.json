@@ -439,6 +439,24 @@
     "closeAction": "Close temporary chat: {{title}}"
   },
   "conversations": {
+    "trace": {
+      "title": "Execution details",
+      "tools": "Tool calls",
+      "requests": "Model requests",
+      "search": "Search tools, paths, or commands",
+      "sources": "Automatically loaded files",
+      "scope": "Shows input prepared by nanobot and the HTTP bodies or WebSocket frames sent by the Codex provider.",
+      "noRequests": "No request snapshots were saved for this task.",
+      "noTools": "No tool calls were saved for this task.",
+      "noMatches": "No matching tool calls.",
+      "more": "Show more",
+      "truncated": "This entry was truncated.",
+      "phase": {
+        "start": "Running",
+        "end": "Completed",
+        "error": "Failed"
+      }
+    },
     "noTasks": "No saved subtasks for this conversation.",
     "title": "Conversation history",
     "description": "Read saved messages from this host across channels.",
