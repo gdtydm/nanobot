@@ -64,6 +64,9 @@ if TYPE_CHECKING:
     from nanobot.agent.memory import Consolidator
 
 
+SUBAGENT_REPLY_FIRST_META = "_subagent_reply_first"
+
+
 class _SubagentOrigin(TypedDict):
     channel: str
     chat_id: str
@@ -601,6 +604,7 @@ class SubagentManager:
         runtime: LLMRuntime | None, *, announce: bool, origin_turn_id: str | None,
         session_policy: SessionPolicy | None,
         project: str | None = None, resume_task_id: str | None = None,
+        reply_first: bool = False,
     ) -> _SubagentTask:
         self.bus.admission.check()
         if runtime is None:
@@ -646,6 +650,7 @@ class SubagentManager:
             origin_turn_id=origin_turn_id,
             project=project,
             worktree_id=worktree_id,
+            reply_first=reply_first,
         )
         self._admitting += 1
         try:
@@ -711,17 +716,24 @@ class SubagentManager:
         session_policy: SessionPolicy | None = None,
         project: str | None = None,
         resume_task_id: str | None = None,
+        reply_first: bool = False,
     ) -> str:
         """Start background work and route its terminal result to the parent."""
         try:
             record = await self._create_task(
                 task, label, origin_channel, origin_chat_id, session_key,
                 origin_message_id, temperature, workspace_scope, runtime, announce=True, origin_turn_id=origin_turn_id,
-                session_policy=session_policy, project=project, resume_task_id=resume_task_id,
+                session_policy=session_policy, project=project, resume_task_id=resume_task_id, reply_first=reply_first,
             )
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
         status = record.status
+        if status.reply_first:
+            return (
+                f"Subagent [{status.label}] accepted for background execution (id: {status.task_id}). "
+                "Reply now with the verified findings, follow-up status, and expected output. "
+                "The task result will arrive in a separate turn. Don't duplicate its work."
+            )
         if status.project is not None:
             return (f"Subagent [{status.label}] queued (id: {status.task_id}). "
                     "The worktree will be prepared when it runs. I'll notify you when it completes.")
@@ -862,6 +874,7 @@ class SubagentManager:
                 receipts=dict(status.receipts),
                 stop_reason=status.stop_reason, error=status.error, partial_result=status.partial,
                 project_status=status if status.project is not None else None,
+                reply_first=status.reply_first,
             )
         if outcome.state == "cancelled":
             raise asyncio.CancelledError
@@ -1026,6 +1039,7 @@ class SubagentManager:
         error: str | None = None,
         partial_result: bool = False,
         project_status: SubagentStatus | None = None,
+        reply_first: bool = False,
     ) -> None:
         status_text = {
             "ok": "completed successfully", "cancelled": "was cancelled",
@@ -1041,6 +1055,7 @@ class SubagentManager:
             stop_reason=stop_reason,
             error=error,
             partial_result=partial_result,
+            reply_first=reply_first,
             project=project_status.project if project_status else None,
             worktree=project_status.worktree if project_status else None,
             branch=project_status.branch if project_status else None,
@@ -1064,6 +1079,8 @@ class SubagentManager:
             "subagent_partial": partial_result,
         }
         metadata["subagent_message_receipts"] = receipts or {}
+        if reply_first:
+            metadata[SUBAGENT_REPLY_FIRST_META] = True
         if receipts:
             announce_content += "\nMessage receipts: " + json.dumps(receipts)
         if origin_message_id:
@@ -1159,4 +1176,17 @@ class SubagentManager:
         return sum(
             1 for tid, task in self._running_tasks.items()
             if self._tasks[tid].status.owner == session_key and not task.done()
+        )
+
+    def should_wait_for_results(self, session_key: str, turn_id: str | None) -> bool:
+        """Check whether a turn should wait for a result before sending its reply."""
+        active = [
+            self._tasks[tid].status for tid, task in self._running_tasks.items()
+            if self._tasks[tid].status.owner == session_key and not task.done()
+        ]
+        if not any(not status.reply_first for status in active):
+            return False
+        return turn_id is None or not any(
+            status.reply_first and status.owner == session_key and status.origin_turn_id == turn_id
+            for status in (*active, *self._terminal_statuses.values())
         )

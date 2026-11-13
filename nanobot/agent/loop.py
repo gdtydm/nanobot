@@ -27,7 +27,7 @@ from nanobot.agent.hook import AgentHook, AgentTurnHookFactory
 from nanobot.agent.memory import Consolidator
 from nanobot.agent.model_runtime import ModelRuntimeResolver
 from nanobot.agent.runner import AgentRunner, AgentRunResult, AgentRunSpec
-from nanobot.agent.subagent import SubagentManager
+from nanobot.agent.subagent import SUBAGENT_REPLY_FIRST_META, SubagentManager
 from nanobot.agent.tools.context import RequestContext, bind_request_context, reset_request_context
 from nanobot.agent.tools.exec_session import ExecSessionManager
 from nanobot.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
@@ -959,6 +959,9 @@ class AgentLoop:
         self._file_state_store.discard(key)
 
     def _can_inject_message(self, msg: InboundMessage) -> bool:
+        if msg.sender_id == "subagent" and msg.metadata.get(SUBAGENT_REPLY_FIRST_META) is True:
+            # The session worker handles this result after delivering the current reply.
+            return False
         if turn_continuation.internal_continuation_inbound(msg.metadata) or any(
             coordinator.owns_turn(msg) for coordinator in self._automation_turn_coordinators
         ):
@@ -1189,7 +1192,7 @@ class AgentLoop:
                 items
                 or pending_queue is None
                 or session is None
-                or self.subagents.get_running_count_by_session(session.key) == 0
+                or not self.subagents.should_wait_for_results(session.key, request_ctx.turn_id)
             ):
                 return items
 

@@ -47,6 +47,14 @@ if TYPE_CHECKING:
         ),
         default=False,
     ),
+    reply_first=BooleanSchema(
+        description=(
+            "For background create: deliver the main agent's current reply before reporting this task's result. "
+            "Use when a verified finding can be shared while dependent work runs. Requires wait=false "
+            "and a conversation that can receive background results."
+        ),
+        default=False,
+    ),
     task_id=StringSchema(
         "Full task ID returned by create. Required for send/cancel; optional for check. "
         "Omit for check to list the current session's active and recently finished tasks.",
@@ -92,12 +100,12 @@ class SubagentTool(Tool):
         self, action: str, task_id: str | None = None, message: str | None = None,
         task: str | None = None, label: str | None = None,
         temperature: float | None = None, wait: bool = False,
-        project: str | None = None, resume_task_id: str | None = None, **kwargs: Any,
+        project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False, **kwargs: Any,
     ) -> str:
         if action == "create":
             if not task or not task.strip():
                 return ToolResult.error("Error: create requires a non-empty task")
-            return await self._create_task(task, label, temperature, wait, project, resume_task_id)
+            return await self._create_task(task, label, temperature, wait, project, resume_task_id, reply_first)
         owner = current_request_session_key()
         try:
             if action == "check":
@@ -122,7 +130,7 @@ class SubagentTool(Tool):
 
     async def _create_task(
         self, task: str, label: str | None, temperature: float | None, wait: bool,
-        project: str | None = None, resume_task_id: str | None = None,
+        project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False,
     ) -> str:
         request_ctx = current_request_context()
         if request_ctx is None or request_ctx.runtime is None:
@@ -135,14 +143,15 @@ class SubagentTool(Tool):
         if not session_key:
             return ToolResult.error("Error: create requires an active session identity")
         inline = wait or not request_ctx.can_receive_background_results or not request_ctx.persist_session
+        if reply_first and inline:
+            return ToolResult.error("Error: reply_first requires wait=false and background result delivery")
         if project is not None and (inline or request_ctx.metadata.get("chat_type") != "p2p"):
             return ToolResult.error("Error: project tasks require a persistent Feishu private chat and wait=false")
         if resume_task_id is not None and project is None:
             return ToolResult.error("Error: resume_task_id requires a configured project")
-        if project is not None:
-            method = partial(self._manager.spawn, project=project, resume_task_id=resume_task_id)
-        else:
-            method = self._manager.run_inline if inline else self._manager.spawn
+        method = self._manager.run_inline if inline else partial(
+            self._manager.spawn, project=project, resume_task_id=resume_task_id, reply_first=reply_first,
+        )
         return await method(
             task=task,
             runtime=request_ctx.runtime,

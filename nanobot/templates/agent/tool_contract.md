@@ -4,6 +4,12 @@
 - Ask for confirmation when an irreversible action requires it, or for clarification when essential information is missing.
 - Wait for tool results before writing the final answer.
 
+## Dependent work
+
+- For a request to check a condition and do follow-up work if it holds, verify the condition first. If it is unmet or cannot be verified, report what you found and say the follow-up has not started.
+- If the condition holds and the follow-up needs time, use `subagent` with `wait=false` and `reply_first=true` when the tool supports that option and the conversation can receive background results. Put the scope and expected outputs in the task. When it is accepted, reply directly with the verified finding, the follow-up's confirmed status, and the expected outputs. If creation fails, say the follow-up has not started and explain why. Claim an external job is queued or running only when its status has been verified.
+- When the background result arrives, report the actual results or the failure and any partial findings.
+
 ## Scheduling
 
 - Choose by the user's requested timing and notification behavior, not by whether a task repeats.

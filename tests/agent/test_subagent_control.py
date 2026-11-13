@@ -278,6 +278,77 @@ async def test_default_loop_keeps_slack_thread_for_late_subagent_result(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("child_finishes_first", [False, True], ids=["still-running", "already-queued"])
+async def test_reply_first_delivers_findings_then_background_results(loop_factory, monkeypatch, child_finishes_first):
+    loop = loop_factory()
+    loop.provider.provider_name = "test"
+    release_child = asyncio.Event()
+    result_queued = asyncio.Event()
+    enqueue = loop._enqueue_session_message
+    first_reply = "The backfill completed. The evaluation was accepted and will report coverage."
+    final_reply = "The evaluation finished. Coverage was 12/20."
+    parent_calls = 0
+
+    async def observe_enqueue(message):
+        await enqueue(message)
+        if message.metadata.get("injected_event") == "subagent_result":
+            result_queued.set()
+
+    async def respond(**kwargs):
+        nonlocal parent_calls
+        if not any(tool["function"]["name"] == "subagent" for tool in kwargs.get("tools") or []):
+            await release_child.wait()
+            return LLMResponse(content="Verified coverage: 12/20.")
+        parent_calls += 1
+        if parent_calls == 1:
+            return LLMResponse(content=None, tool_calls=[ToolCallRequest(
+                id="evaluate", name="subagent", arguments={
+                    "action": "create", "task": "Evaluate coverage", "wait": False, "reply_first": True,
+                },
+            )])
+        if parent_calls == 2:
+            if child_finishes_first:
+                release_child.set()
+                await result_queued.wait()
+            return LLMResponse(content=first_reply)
+        assert parent_calls == 3
+        assert any(message["content"] == first_reply for message in kwargs["messages"])
+        assert any("Verified coverage: 12/20." in str(message["content"]) for message in kwargs["messages"])
+        return LLMResponse(content=final_reply)
+
+    async def next_reply():
+        while True:
+            message = await loop.bus.consume_outbound()
+            if message.event is None:
+                return message
+
+    monkeypatch.setattr(loop, "_enqueue_session_message", observe_enqueue)
+    loop.provider.chat_stream_with_retry = AsyncMock(side_effect=respond)
+    loop.provider.chat_with_retry = AsyncMock(side_effect=respond)
+    inbound = InboundMessage("feishu", "ou_user", "ou_user", "Check the backfill, then evaluate coverage.")
+    consumer = asyncio.create_task(loop.run())
+    try:
+        await loop.bus.publish_inbound(inbound)
+        first = await asyncio.wait_for(next_reply(), timeout=10)
+        assert (first.channel, first.chat_id, first.content) == ("feishu", "ou_user", first_reply)
+        assert result_queued.is_set() == child_finishes_first
+        release_child.set()
+        final = await asyncio.wait_for(next_reply(), timeout=10)
+        assert (final.channel, final.chat_id, final.content) == ("feishu", "ou_user", final_reply)
+        saved = loop.sessions.read_session_snapshot(inbound.session_key)
+        assert saved is not None
+        replies = [
+            message["content"] for message in saved.messages
+            if message["role"] == "assistant" and message["content"] in (first_reply, final_reply)
+        ]
+        assert replies == [first_reply, final_reply]
+    finally:
+        release_child.set()
+        loop.stop()
+        await asyncio.wait_for(consumer, timeout=10)
+
+
+@pytest.mark.asyncio
 async def test_owner_canonical_fallback_and_absent_context(tmp_path):
     manager, _, ctx = setup(tmp_path)
     manager.runner.run = AsyncMock(return_value=AgentRunResult(messages=[], final_content="private"))

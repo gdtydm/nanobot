@@ -43,6 +43,7 @@ class SubagentStatus:
     worktree_id: str | None = None
     worktree: str | None = None
     branch: str | None = None
+    reply_first: bool = False
 
     def as_dict(self) -> dict[str, object]:
         """Serialize task observations without exposing ownership or resources."""
