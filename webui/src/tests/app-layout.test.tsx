@@ -436,6 +436,60 @@ describe("App layout", () => {
     expect(requestMutationSpy).not.toHaveBeenCalled();
   });
 
+  it("opens saved Feishu and WeChat topics in the main chat area", async () => {
+    const feishu = "feishu.support:oc_group:om_thread";
+    const wechat = "weixin:account@im.wechat";
+    mockSessions = [{
+      key: "websocket:chat-a", channel: "websocket", chatId: "chat-a",
+      createdAt: null, updatedAt: null, title: "Local topic", preview: "",
+    }];
+    vi.mocked(fetchBootstrap).mockResolvedValue({
+      token: "tok", api_token: "api-tok", ws_path: "/", expires_in: 300,
+      terminal: { webui: { capabilities: ["webui.core.v1", "webui.conversations.read.v1", "webui.channel-topics.read.v1"] } },
+    });
+    const conversation = (content: string) => ({
+      messages: [{ message_index: 1, role: "assistant", timestamp: null, content }],
+      next_before: null, generation: "saved",
+    });
+    mockFetchRoutes({
+      "/api/webui/conversations": { sessions: [
+        { key: feishu, title: "Feishu support", preview: "", updated_at: null },
+        { key: wechat, title: "WeChat planning", preview: "", updated_at: null },
+        { key: "telegram:chat", title: "Telegram history", preview: "", updated_at: null },
+      ] },
+      [`/api/webui/conversations/${encodeURIComponent(feishu)}`]: conversation("Saved Feishu reply"),
+      [`/api/webui/conversations/${encodeURIComponent(wechat)}`]: conversation("Saved WeChat reply"),
+    });
+    window.history.replaceState(null, "", `/#/chat/${encodeURIComponent(wechat)}`);
+    render(<App />);
+    await act(async () => { await import("@/components/thread/ChannelTopicThread"); });
+
+    const sidebar = await screen.findByRole("navigation", { name: "Sidebar navigation" });
+    expect(await within(sidebar).findByRole("button", { name: "Local topic" })).toBeVisible();
+    expect(within(sidebar).queryByRole("button", { name: /Telegram history/ })).not.toBeInTheDocument();
+    expect(await screen.findByText("Saved WeChat reply")).toBeVisible();
+    expect(within(sidebar).getByRole("button", { name: /WeChat planning/ })).toHaveAttribute("aria-current", "page");
+    const feishuTopic = within(sidebar).getByRole("button", { name: /Feishu support/ });
+    fireEvent.click(feishuTopic);
+    expect(await screen.findByText("Saved Feishu reply")).toBeVisible();
+    expect(feishuTopic).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByText("Saved WeChat reply")).not.toBeInTheDocument();
+    expect(window.location.hash).toBe(`#/chat/${encodeURIComponent(feishu)}`);
+    expect(within(screen.getByRole("main")).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(attachSpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps the topic list on the core session API when the gateway only supports conversation history", async () => {
+    vi.mocked(fetchBootstrap).mockResolvedValue({
+      token: "tok", api_token: "api-tok", ws_path: "/", expires_in: 300,
+      terminal: { webui: { capabilities: ["webui.core.v1", "webui.conversations.read.v1"] } },
+    });
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "Conversation history" })).toBeVisible();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === "/api/webui/conversations")).toBe(false);
+  });
+
   it("shows the auth form without an invalid-password error on first load", async () => {
     vi.mocked(fetchBootstrap).mockRejectedValueOnce(
       new Error("bootstrap failed: HTTP 401"),

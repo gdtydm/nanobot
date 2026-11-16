@@ -57,7 +57,7 @@ export function ConversationsDialog({ getToken, onClose, showTaskHistory = false
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="h-[min(42rem,85dvh)] max-w-3xl grid-rows-[auto_minmax(0,1fr)]">
+      <DialogContent className="h-[min(42rem,85dvh)] max-w-3xl grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]">
         <DialogHeader>
           <DialogTitle>{t("conversations.title")}</DialogTitle>
           <DialogDescription>{t("conversations.description")}</DialogDescription>

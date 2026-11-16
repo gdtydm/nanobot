@@ -1095,8 +1095,10 @@ class GatewayHTTPHandler:
 
             return await sessions.state.query_metadata(render)
 
-        session_key = _decode_api_key(key)
-        if session_key is None:
+        # Stored channel keys are opaque database identifiers. WeChat IDs,
+        # for example, can include an @im.wechat suffix.
+        session_key = unquote(key)
+        if not session_key or len(session_key) > 512 or not session_key.isprintable():
             return _http_error(400, "invalid session key")
         query = _parse_query(request.path)
         raw_before = _query_first(query, "before")

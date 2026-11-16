@@ -174,7 +174,7 @@ function compactMcpValues(values: Record<string, unknown>): Record<string, unkno
   return payload;
 }
 
-function splitKey(key: string): { channel: string; chatId: string } {
+export function splitKey(key: string): { channel: string; chatId: string } {
   const idx = key.indexOf(":");
   if (idx === -1) return { channel: "", chatId: key };
   return { channel: key.slice(0, idx), chatId: key.slice(idx + 1) };

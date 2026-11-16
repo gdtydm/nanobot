@@ -51,6 +51,7 @@ import { floatingSurfaceElevationClassName } from "@/components/ui/floating-surf
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 
 import { useSessions } from "@/hooks/useSessions";
+import { useChannelTopics } from "@/hooks/useChannelTopics";
 import { useReconnectRuns } from "@/hooks/useReconnectRuns";
 import { useDeferredTitleRefresh } from "@/hooks/useDeferredTitleRefresh";
 import { useSidebarState } from "@/hooks/useSidebarState";
@@ -91,7 +92,8 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Disclosure } from "@/components/ui/disclosure";
-import { fetchSettings, fetchWorkspaces } from "@/lib/api";
+import { fetchSettings, fetchWorkspaces, splitKey } from "@/lib/api";
+import { isTopicChannel, topicChannelName } from "@/channel-plugins/topic-channel";
 import {
   createRuntimeHost,
   isNativeRuntime,
@@ -159,6 +161,10 @@ const SessionSearchDialog = lazy(async () => {
 const ConversationsDialog = lazy(async () => {
   const module = await import("@/components/ConversationsDialog");
   return { default: module.ConversationsDialog };
+});
+const ChannelTopicThread = lazy(async () => {
+  const module = await import("@/components/thread/ChannelTopicThread");
+  return { default: module.ChannelTopicThread };
 });
 const DeleteConfirm = lazy(async () => {
   const module = await import("@/components/DeleteConfirm");
@@ -911,6 +917,10 @@ function Shell({
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [conversationsOpen, setConversationsOpen] = useState(false);
   const conversationsSupported = webuiCapabilities.includes("webui.conversations.read.v1");
+  const channelTopicsSupported = webuiCapabilities.includes("webui.channel-topics.read.v1");
+  const channelTopics = useChannelTopics(
+    channelTopicsSupported, localActive && !managingConnections,
+  );
   useEffect(() => {
     if (!localActive || managingConnections || !conversationsSupported) setConversationsOpen(false);
   }, [localActive, managingConnections, conversationsSupported]);
@@ -926,7 +936,7 @@ function Shell({
   }, [updateSidebarState]);
   const lastActivePaneByTabRef = useRef(new Map<string, string>());
   const [creatingPane, setCreatingPane] = useState(false);
-  const topicSessions = sessions;
+  const topicSessions = useMemo(() => [...sessions, ...channelTopics], [sessions, channelTopics]);
   const [pendingDelete, setPendingDelete] = useState<{
     items: SidebarDeleteItem[];
     automations?: SessionAutomationJob[];
@@ -1139,6 +1149,9 @@ function Shell({
     if (temporarySessions[activeKey]) return temporarySessions[activeKey];
     return sessions.find((s) => s.key === activeKey) ?? null;
   }, [sessions, activeKey, temporarySessions]);
+  const routeChannel = activeKey && channelTopicsSupported ? splitKey(activeKey).channel : "";
+  const activeChannelKey = isTopicChannel(routeChannel) ? activeKey : null;
+  const activeChannelTopic = channelTopics.find((session) => session.key === activeChannelKey);
   const activeTabMatch = useMemo(() => (
     activeKey && !temporarySessions[activeKey]
       ? workbenchTabForPane(workbenchState, activeKey)
@@ -1252,7 +1265,7 @@ function Shell({
       }, { replace: true });
       return;
     }
-    if (sessions.some((session) => session.key === activeKey)) return;
+    if (activeChannelKey || sessions.some((session) => session.key === activeKey)) return;
     // WebKit can commit the route before useSessions' optimistic insert.
     // Keep that just-created destination valid until the session list catches up.
     if (pendingCreatedKey === activeKey) return;
@@ -1265,7 +1278,7 @@ function Shell({
           },
       { replace: true },
     );
-  }, [activeKey, loading, navigate, sessions, temporarySessions]);
+  }, [activeChannelKey, activeKey, loading, navigate, sessions, temporarySessions]);
 
   useEffect(() => {
     return client.onSessionUpdate((chatId, scope, workspaceScope) => {
@@ -1840,7 +1853,7 @@ function Shell({
     const nextKey = (() => {
       if (!activeKey) return null;
       if (temporarySessionsRef.current[activeKey]) return activeKey;
-      if (topicSessions.some((session) => session.key === activeKey)) return activeKey;
+      if (activeChannelKey || sessions.some((session) => session.key === activeKey)) return activeKey;
       return null;
     })();
     navigate({
@@ -1849,7 +1862,7 @@ function Shell({
       temporary: Boolean(nextKey && temporarySessionsRef.current[nextKey]),
       settingsSection: "overview",
     });
-  }, [activeKey, navigate, topicSessions]);
+  }, [activeChannelKey, activeKey, navigate, sessions]);
 
   const onRestart = useCallback(() => {
     const chatId = activeSession?.chatId ?? client.defaultChatId;
@@ -2131,15 +2144,18 @@ function Shell({
     });
   }, [orderedWorkbenchTabs, sessions, titleForSession]);
   const sidebarTopicSessions = useMemo(
-    () => sidebarTabPresentations.map((presentation) => presentation.session),
-    [sidebarTabPresentations],
+    () => [...sidebarTabPresentations.map((presentation) => presentation.session), ...channelTopics],
+    [sidebarTabPresentations, channelTopics],
   );
 
+  const activeChannelName = activeChannelKey ? topicChannelName(routeChannel, t) : "";
   const headerTitle = temporaryChatActive
     ? deriveTemporaryChatTitle(activeSession?.preview, t("temporaryChat.title"))
     : activeSession
     ? titleForSession(activeSession)
-    : t("app.brand");
+    : activeChannelTopic
+      ? displayTitle(activeChannelTopic, sidebarState.title_overrides, activeChannelName)
+      : activeChannelName || t("app.brand");
   const workbenchPaneSessions = useMemo(() => {
     if (!activeTabState) return [];
     const byKey = new Map(sessions.map((session) => [session.key, session]));
@@ -2243,13 +2259,13 @@ function Shell({
   const onSelectSidebarItem = useCallback((key: string) => {
     if (
       temporarySessionsRef.current[key]
-      || sessions.some((session) => session.key === key)
+      || topicSessions.some((session) => session.key === key)
     ) {
       onSelectChat(key);
       return;
     }
     onSelectSidebarTab(key);
-  }, [onSelectChat, onSelectSidebarTab, sessions]);
+  }, [onSelectChat, onSelectSidebarTab, topicSessions]);
 
   const onSelectSidebarPane = useCallback((_tabKey: string, paneKey: string) => {
     onSelectChat(paneKey);
@@ -2316,10 +2332,10 @@ function Shell({
       });
       return;
     }
-    document.title = activeSession
+    document.title = activeSession || activeChannelKey
       ? t("app.documentTitle.chat", { title: headerTitle })
       : t("app.documentTitle.base");
-  }, [localActive, activeSession, headerTitle, i18n.resolvedLanguage, t, view]);
+  }, [localActive, activeSession, activeChannelKey, headerTitle, i18n.resolvedLanguage, t, view]);
 
   const pinnedPaneKeys = useMemo(
     () => new Set(sidebarState.pinned_keys),
@@ -2559,7 +2575,18 @@ function Shell({
             >
               <ThreadVisibilityContext.Provider value={localActive && !managingConnections && view === "chat"}>
                 <Suspense fallback={<StartupShell embedded surface="chat" sidebarExpanded={hostSidebarOpen} />}>
-                  <PaneWorkbench
+                  {activeChannelKey ? (
+                    <ChannelTopicThread
+                      key={activeChannelKey}
+                      sessionKey={activeChannelKey}
+                      channel={activeChannelName}
+                      updatedAt={activeChannelTopic?.updatedAt}
+                      title={headerTitle}
+                      theme={theme}
+                      onToggleTheme={toggle}
+                      onToggleSidebar={toggleSidebar}
+                    />
+                  ) : <PaneWorkbench
                     panes={renderedWorkbenchPanes}
                     activePaneKey={renderedActivePaneKey}
                     layout={renderedWorkbenchLayout}
@@ -2702,7 +2729,7 @@ function Shell({
                         />
                       );
                     }}
-                  />
+                  />}
                 </Suspense>
               </ThreadVisibilityContext.Provider>
             </div>}
@@ -2730,7 +2757,7 @@ function Shell({
                     skillsError={skillsError}
                     onStartAutomationChat={onStartAutomationChat}
                     titleOverrides={sidebarState.title_overrides}
-                    sessions={topicSessions}
+                    sessions={sessions}
                     onSectionChange={onSettingsSectionChange}
                     onLogout={onLogout}
                     onRestart={onRestart}

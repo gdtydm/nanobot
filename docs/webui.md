@@ -90,6 +90,8 @@ Open **Settings → About** to check for updates automatically. Startup, reconne
 
 The sidebar is the topic switcher. Each topic keeps its own history, title, workspace selection, and linked automations. Use a new topic when you want a separate context; use fork when you want to continue from an existing point without changing the original thread.
 
+Saved Feishu and WeChat conversations also appear in the topic list. Open one to read its saved messages and continue the conversation in its original app.
+
 Open **Conversation history** in the sidebar to browse saved conversations across channels on the connected host. Choose a conversation and select **Load earlier messages** to page through its user and assistant text. Continue a chat app conversation in its original app.
 
 Choose **Subtasks** within a saved conversation to inspect its delegated work. Open a task to view its conversation and tool activity, and use **Refresh** to update the saved record.

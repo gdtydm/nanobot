@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { isTopicChannel, topicChannelName } from "@/channel-plugins/topic-channel";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -400,7 +401,7 @@ export const ChatList = memo(function ChatList({
       }
     }
     for (const session of sessions) {
-      if (items.has(session.key)) continue;
+      if (items.has(session.key) || isTopicChannel(session.channel)) continue;
       items.set(session.key, {
         key: session.key,
         label: displayTitle(session, titleOverrides, t("chat.newChat")),
@@ -660,7 +661,7 @@ export const ChatList = memo(function ChatList({
         ? paneGroup?.panes.map((pane) => pane.key) ?? [session.key]
         : [session.key];
     })
-  ))));
+  )))).filter((key) => deleteItemsByKey.has(key));
 
   const beginDeleteSelection = (keys: string[]) => {
     const validKeys = keys.filter((key) => deleteItemsByKey.has(key));
@@ -854,7 +855,8 @@ export const ChatList = memo(function ChatList({
                   {visibleSessions.map((s) => {
                     const topicActive = s.key === activeKey;
                     const paneGroup = paneGroups[s.key];
-                    const title = displayTitle(s, titleOverrides, t("chat.newChat"));
+                    const channel = isTopicChannel(s.channel) ? topicChannelName(s.channel, t) : null;
+                    const title = displayTitle(s, titleOverrides, channel ?? t("chat.newChat"));
                     const resolvedPaneGroup = paneGroup ?? {
                       tabKey: s.key,
                       title,
@@ -1006,7 +1008,7 @@ export const ChatList = memo(function ChatList({
 
                     const isPinned = pinned.has(s.key);
                     const isArchived = archived.has(s.key);
-                    const activityState = running.has(s.chatId)
+                    const activityState = channel ? null : running.has(s.chatId)
                       ? "running"
                       : recovery.has(s.chatId)
                         ? "recovery"
@@ -1017,7 +1019,7 @@ export const ChatList = memo(function ChatList({
                       && paneGroupTargets.some((target) => (
                         target.key !== paneGroup?.tabKey && !target.atCapacity
                       ));
-                    const canDragSession = !deleteSelectionMode
+                    const canDragSession = !channel && !deleteSelectionMode
                       && (!topicActive || hasPaneMoveTarget);
                     const actionMenuId = `session:${s.key}`;
                     return (
@@ -1032,7 +1034,7 @@ export const ChatList = memo(function ChatList({
                         <div
                           data-chat-row={s.key}
                           data-sidebar-tab={s.key}
-                          onContextMenu={(event) => (
+                          onContextMenu={channel ? undefined : (event) => (
                             actionMenus.openFromContextMenu(event, actionMenuId)
                           )}
                           className={cn(
@@ -1055,6 +1057,7 @@ export const ChatList = memo(function ChatList({
                             />
                           ) : <button
                               type="button"
+                              disabled={Boolean(channel) && deleteSelectionMode}
                               onClick={(event) => {
                                 if (deleteSelectionMode) {
                                   toggleDeleteSelection(tabDeleteKeys, event.shiftKey, s.key);
@@ -1072,7 +1075,7 @@ export const ChatList = memo(function ChatList({
                               }}
                               onDragEnd={clearDraggedSession}
                               aria-current={topicActive ? "page" : undefined}
-                              aria-pressed={deleteSelectionMode ? tabSelected : undefined}
+                              aria-pressed={deleteSelectionMode && !channel ? tabSelected : undefined}
                               className={cn(
                                 "flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-left",
                                 canDragSession && "cursor-grab active:cursor-grabbing",
@@ -1080,7 +1083,7 @@ export const ChatList = memo(function ChatList({
                                 compact ? "py-1" : "py-1.5",
                               )}
                             >
-                              {deleteSelectionMode ? (
+                              {deleteSelectionMode && !channel ? (
                                 <SelectionIndicator
                                   checked={tabSelected}
                                   partial={tabPartiallySelected}
@@ -1091,11 +1094,14 @@ export const ChatList = memo(function ChatList({
                                 <span className="min-w-0 flex-1 truncate font-normal leading-5">
                                   {title}
                                 </span>
+                                {channel && channel !== title ? (
+                                  <span className="shrink-0 text-[11px] text-sidebar-muted-foreground">{channel}</span>
+                                ) : null}
                                 {isPinned ? <PinnedChatIndicator /> : null}
                               </span>
                           </button>}
                           <SessionActivityIndicator state={activityState} />
-                          {!deleteSelectionMode && renamingKey !== s.key ? (
+                          {!channel && !deleteSelectionMode && renamingKey !== s.key ? (
                             <DropdownMenu
                               modal={false}
                               open={actionMenus.openId === actionMenuId}

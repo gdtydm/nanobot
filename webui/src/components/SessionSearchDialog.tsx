@@ -2,6 +2,7 @@ import { type KeyboardEvent, useDeferredValue, useEffect, useMemo, useRef, useSt
 import { Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { isTopicChannel, topicChannelName } from "@/channel-plugins/topic-channel";
 import {
   Dialog,
   DialogContent,
@@ -63,19 +64,20 @@ export function SessionSearchDialog({
   const searchableSessions = useMemo(() => sessions.map((session) => ({
     session,
     text: [titleOverrides[session.key], session.title, visibleSessionPreview(session.preview),
+      isTopicChannel(session.channel) ? topicChannelName(session.channel, t) : undefined,
       session.handle ? `@${session.handle.name}` : undefined]
       .filter(Boolean).join(" ").toLowerCase(),
-  })), [sessions, titleOverrides]);
+  })), [sessions, t, titleOverrides]);
   const sessionResults = useMemo<SessionSearchResult[]>(() => {
     if (!open) return [];
     if (!searchQuery) return sessions.map((session) => ({ session }));
     const terms = searchQuery.split(/\s+/).filter(Boolean);
     return searchableSessions.flatMap(({ session, text }) => {
       if (terms.every((term) => text.includes(term))) return [{ session }];
-      const preview = messageCache && findLoadedMessagePreview(
+      const preview = messageCache && !isTopicChannel(session.channel) && findLoadedMessagePreview(
         messageCache.readLoadedMessages(session.chatId), searchQuery,
       );
-      return preview === undefined ? [] : [{ session, preview }];
+      return typeof preview === "string" ? [{ session, preview }] : [];
     });
   }, [searchQuery, open, sessions, searchableSessions, messageCache, searchRevision]);
   const itemCount = sessionResults.length;
@@ -214,9 +216,10 @@ export function SessionSearchDialog({
                 <li aria-hidden style={{ height: windowStart * rowHeight }} />
                 {sessionResults.slice(windowStart, windowEnd).map(({ session, preview: matchPreview }, offset) => {
                   const index = windowStart + offset;
+                  const channel = isTopicChannel(session.channel) ? topicChannelName(session.channel, t) : null;
                   const title = titleOverrides[session.key]?.trim() ||
                     session.title?.trim() ||
-                    deriveTitle(session.preview, t("chat.newChat"));
+                    deriveTitle(session.preview, channel ?? t("chat.newChat"));
                   const preview = matchPreview ?? visibleSessionPreview(session.preview);
                   const showPreview =
                     preview.length > 0 &&
@@ -253,9 +256,9 @@ export function SessionSearchDialog({
                             </span>
                           ) : null}
                         </span>
-                        {active ? (
+                        {active || (channel && channel !== title) ? (
                           <span className="shrink-0 rounded-full bg-muted-foreground/10 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                            {t("common.current", { defaultValue: "Current" })}
+                            {active ? t("common.current", { defaultValue: "Current" }) : channel}
                           </span>
                         ) : null}
                       </button>

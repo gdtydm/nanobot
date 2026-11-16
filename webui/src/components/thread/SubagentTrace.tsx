@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +8,7 @@ import {
   fetchSubagentTrace, fetchSubagentTraceDetail,
   type SubagentTraceDetail, type SubagentTraceIndex, type SubagentTraceRequest, type SubagentTraceTool,
 } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 interface TraceScope {
   token: string;
@@ -42,7 +44,7 @@ export function SubagentTrace({ token, sessionKey, taskId, refreshRevision }: Tr
     : data?.requests ?? [];
   const visible = entries.slice().reverse().slice(0, page * 40);
 
-  return <section aria-label={t("conversations.trace.title")} className="space-y-3 px-2 pb-4 sm:px-4">
+  return <section aria-label={t("conversations.trace.title")} className="min-w-0 space-y-3 px-2 pb-4 sm:px-4">
     <div className="flex flex-wrap items-center gap-1.5">
       {(["tools", "requests"] as const).map((kind) => (
         <Button key={kind} size="sm" variant={view === kind ? "secondary" : "ghost"} aria-pressed={view === kind}
@@ -73,23 +75,28 @@ export function SubagentTrace({ token, sessionKey, taskId, refreshRevision }: Tr
       {entries.length === 0 &&
         <p className="text-sm text-muted-foreground">{t(view === "requests" ? "conversations.trace.noRequests"
           : data.tools.length ? "conversations.trace.noMatches" : "conversations.trace.noTools")}</p>}
-      {visible.length > 0 && <ul className="divide-y rounded-md border">
+      {visible.length > 0 && <ul className="divide-y overflow-hidden rounded-md border">
         {visible.map((entry) => {
           const expanded = selected?.index === entry.index && selected.id === entry.id;
           return <li key={entry.index}>
             <button type="button" aria-expanded={expanded} onClick={() => setSelected(expanded ? null : entry)}
-              className="block w-full min-w-0 px-3 py-2 text-start text-sm hover:bg-muted focus-visible:bg-muted">
-              {"model" in entry ? <>
-                <span className="font-medium">#{entry.index + 1} · {entry.transport} · {entry.model}</span>
-                <span className="ms-2 text-xs text-muted-foreground">{new Date(entry.created_at_ms).toLocaleString()}</span>
-              </> : <>
-                <span className="font-mono font-medium">{entry.name}</span>
-                <span className={entry.phase === "error" ? "ms-2 text-xs text-destructive" : "ms-2 text-xs text-muted-foreground"}>
-                  {entry.phase === "start" || entry.phase === "end" || entry.phase === "error"
-                    ? t(`conversations.trace.phase.${entry.phase}`) : entry.phase}
-                </span>
-                {entry.target && <span className="block truncate font-mono text-xs text-muted-foreground" title={entry.target}>{entry.target}</span>}
-              </>}
+              className="flex w-full items-center gap-3 px-3 py-2 text-start text-sm hover:bg-muted focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring aria-expanded:bg-muted/50">
+              <span className="min-w-0 flex-1">
+                {"model" in entry ? <>
+                  <span className="block truncate font-medium" title={entry.model}>#{entry.index + 1} · {entry.transport} · {entry.model}</span>
+                  <span className="block text-xs text-muted-foreground">{new Date(entry.created_at_ms).toLocaleString()}</span>
+                </> : <>
+                  <span className="flex items-baseline gap-2">
+                    <span className="min-w-0 truncate font-mono font-medium" title={entry.name}>{entry.name}</span>
+                    <span className={cn("shrink-0 text-xs", entry.phase === "error" ? "text-destructive" : "text-muted-foreground")}>
+                      {entry.phase === "start" || entry.phase === "end" || entry.phase === "error"
+                        ? t(`conversations.trace.phase.${entry.phase}`) : entry.phase}
+                    </span>
+                  </span>
+                  {entry.target && <span className="block truncate font-mono text-xs text-muted-foreground" title={entry.target}>{entry.target}</span>}
+                </>}
+              </span>
+              <ChevronRight aria-hidden className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform rtl:rotate-180 motion-reduce:transition-none", expanded && "rotate-90 rtl:rotate-90")} />
             </button>
             {expanded && <TraceDetail key={entry.id} token={token} sessionKey={sessionKey} taskId={taskId} entry={entry} />}
           </li>;
@@ -129,7 +136,7 @@ function TraceDetail({ token, sessionKey, taskId, entry }: TraceScope & { entry:
   } else {
     content = <>
       {result.truncated && <p className="text-xs text-muted-foreground">{t("conversations.trace.truncated")}</p>}
-      <pre tabIndex={0} className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 text-xs">{result.body}</pre>
+      <pre tabIndex={0} className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs [overflow-wrap:anywhere]">{result.body}</pre>
     </>;
   }
   return <div className="space-y-2 px-3 pb-3">{content}</div>;

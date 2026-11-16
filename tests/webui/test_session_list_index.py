@@ -389,6 +389,9 @@ def test_conversations_api_lists_channels_and_pages_visible_history(tmp_path, mo
             channel.add_message("user" if index % 2 == 0 else "assistant", f"message {index}")
         channel.add_message("assistant", "internal", **{HIDDEN_HISTORY_META: True})
         manager.save(channel)
+        wechat = manager.get_or_create("weixin:account@im.wechat")
+        wechat.add_message("user", "WeChat message")
+        manager.save(wechat)
         browser = manager.get_or_create("websocket:chat")
         browser.add_message("user", "WebUI message")
         manager.save(browser)
@@ -415,7 +418,7 @@ def test_conversations_api_lists_channels_and_pages_visible_history(tmp_path, mo
             assert (await get(base, Headers())).status_code == 401
             assert (await get(f"{base}/{quote(internal.key, safe='')}")).status_code == 404
             rows = json.loads((await get(base)).body)["sessions"]
-            assert {row["key"] for row in rows} == {browser.key, channel.key}
+            assert {row["key"] for row in rows} == {browser.key, channel.key, wechat.key}
             old_client_rows = json.loads((await get("/api/sessions")).body)["sessions"]
             assert [row["key"] for row in old_client_rows] == [browser.key]
 
@@ -430,6 +433,10 @@ def test_conversations_api_lists_channels_and_pages_visible_history(tmp_path, mo
             assert [message["content"] for message in second["messages"]] == ["message 0", "message 1"]
             assert second["next_before"] is None
             assert (await get(f"{path}?before=2&generation=stale")).status_code == 409
+            wechat_path = f"{base}/{quote(wechat.key, safe='')}"
+            assert (await get(wechat_path, Headers())).status_code == 401
+            wechat_history = json.loads((await get(wechat_path)).body)
+            assert [message["content"] for message in wechat_history["messages"]] == ["WeChat message"]
         finally:
             await manager.state.aclose()
 
