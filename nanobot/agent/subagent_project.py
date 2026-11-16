@@ -235,7 +235,7 @@ async def reclaim_project_worktrees(
     ):
         config = projects.get(status.project) if status.project is not None else None
         if (
-            config is None or status.owner != config.feishu_session or status.state != "done"
+            config is None or not config.allows(status.owner) or status.state != "done"
             or status.completed_at is None or worktree_id in active or in_use(worktree_id)
         ):
             continue

@@ -290,6 +290,11 @@ class BaseChannel(ABC):
         )
         return bool(streaming) and type(self).send_delta is not BaseChannel.send_delta
 
+    async def send_task_notice(self, msg: OutboundMessage) -> str | None:
+        """Send a task notice and return its native reply anchor when available."""
+        await self.send(msg)
+        return None
+
     def is_allowed(self, sender_id: str) -> bool:
         """Check sender permission: star > allowlist > pairing store > deny."""
         if isinstance(self.config, dict):

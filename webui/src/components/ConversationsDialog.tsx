@@ -216,7 +216,8 @@ function ConversationTasks({ sessionKey, getToken, onBack, showTaskTrace }: {
         {tasks?.length === 0 && <p className="text-sm text-muted-foreground">{t("conversations.noTasks")}</p>}
         {task ? (
           <SubagentThread key={task.task_id} token={getToken()} sessionKey={sessionKey} task={task}
-            historyEnabled traceEnabled={showTaskTrace} refreshRevision={refresh} isStreaming={isActiveSubagentTask(task)} />
+            historyEnabled traceEnabled={showTaskTrace} refreshRevision={refresh}
+            isStreaming={isActiveSubagentTask(task) && task.state !== "waiting_input"} />
         ) : (
           <ul className="divide-y divide-border">
             {tasks?.map((row) => (

@@ -1822,6 +1822,7 @@
         "queued": "En attente",
         "running": "En cours",
         "stopping": "Arrêt en cours",
+        "waiting_input": "En attente de votre réponse",
         "done": "Terminée",
         "incomplete": "Incomplète",
         "error": "Échec",

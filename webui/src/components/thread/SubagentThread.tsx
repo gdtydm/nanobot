@@ -22,12 +22,22 @@ export function SubagentThread({
 }: SubagentThreadProps) {
   const { t } = useTranslation();
   const [traceOpen, setTraceOpen] = useState(false);
-  const showTrace = traceEnabled && traceOpen;
+  const canShowTrace = traceEnabled && task.backend !== "codex";
+  const showTrace = canShowTrace && traceOpen;
   const { messages, loading, error, activeTurnId, retry } = useSubagentThread({
     token, sessionKey, task, historyEnabled: historyEnabled && !showTrace, refreshRevision,
   });
   return <>
-    {traceEnabled &&
+    {task.backend === "codex" &&
+      <div className="space-y-2 px-2 pb-3 text-sm sm:px-4">
+        <p className="text-muted-foreground">
+          {["Codex", task.reference, task.model, t(`thread.subagents.states.${task.state}`)].filter(Boolean).join(" · ")}
+        </p>
+        {task.progress && <p>{task.progress}</p>}
+        {task.state === "waiting_input" && task.question && <p className="whitespace-pre-wrap">{task.question}</p>}
+      </div>
+    }
+    {canShowTrace &&
       <div className="flex px-2 pb-3 sm:px-4">
         <Button size="sm" variant="outline" aria-expanded={showTrace} onClick={() => setTraceOpen((open) => !open)}>
           {t("conversations.trace.title")}

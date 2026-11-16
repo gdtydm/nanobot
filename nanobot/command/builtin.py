@@ -12,7 +12,7 @@ from loguru import logger
 
 from nanobot import __version__
 from nanobot.bus.events import OutboundMessage
-from nanobot.command.router import CommandContext, CommandRouter
+from nanobot.command.router import CommandContext, CommandExpansion, CommandInput, CommandRouter
 from nanobot.command.spec import BuiltinCommandSpec
 from nanobot.command.spec import CommandLifecycle as CommandLifecycle
 from nanobot.command.user_shell import cmd_user_shell
@@ -70,6 +70,10 @@ CORE_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "brain",
         "[preset]",
         accepts_args=True,
+    ),
+    BuiltinCommandSpec(
+        "/codex", "Delegate to Codex", "Delegate a task to Codex in this conversation.",
+        "workflow", "<task>", accepts_args=True, lifecycle="agent_turn_with_args",
     ),
     BuiltinCommandSpec(
         "/history",
@@ -929,6 +933,18 @@ def build_help_text(specs: tuple[BuiltinCommandSpec, ...] = CORE_COMMAND_SPECS) 
     return "\n".join(lines)
 
 
+async def cmd_codex(command: CommandInput) -> CommandExpansion | OutboundMessage:
+    msg = command.msg
+    if not command.is_user_turn or not command.args.strip():
+        return OutboundMessage(msg.channel, msg.chat_id, "Usage: /codex <task>", metadata=msg.metadata)
+    return CommandExpansion(replace(
+        msg,
+        content="The user explicitly delegated this task to Codex. Resolve the project and task requirements, "
+                "then use subagent with backend=codex.\n\n" + command.args.strip(),
+        metadata={**msg.metadata, "original_command": msg.content},
+    ), temporary_session_error="Codex tasks require a persistent conversation.")
+
+
 def register_core_commands(router: CommandRouter) -> None:
     """Register slash commands owned by the core runtime."""
     for spec in CORE_COMMAND_SPECS:
@@ -941,6 +957,7 @@ def register_core_commands(router: CommandRouter) -> None:
     router.exact("/status", cmd_status)
     router.exact("/model", cmd_model)
     router.prefix("/model ", cmd_model)
+    router.input_command("/codex", cmd_codex)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)
     router.exact("/trigger", cmd_trigger)

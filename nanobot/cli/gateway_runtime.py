@@ -824,6 +824,7 @@ def _run_claimed_gateway(
         webui_discard_session=agent.discard_session,
         config_path=Path(config_path),
     )
+    agent.subagents.send_task_notice = channels.send_task_notice
 
     async def _pick_heartbeat_target() -> tuple[str, str]:
         archived_keys = await ensure_webui_session_archives(session_manager.state)
@@ -991,9 +992,9 @@ def _run_claimed_gateway(
             tasks,
             console.print,
         )
-        from nanobot.channels.feishu.subagent_progress import FeishuSubagentProgress
+        from nanobot.channels.subagent_progress import ProjectSubagentProgress
 
-        task_progress = FeishuSubagentProgress(
+        task_progress = ProjectSubagentProgress(
             bus, agent.subagents.check, agent.subagents.is_execution_live,
         ) if config.tools.subagent.projects else None
         try:

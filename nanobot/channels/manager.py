@@ -8,6 +8,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -38,6 +39,8 @@ from nanobot.channels.registry import channel_default_enabled
 from nanobot.config.schema import Config
 from nanobot.security.workspace_access import WorkspaceScopeResolver
 from nanobot.security.workspace_policy import resolve_allowed_path
+from nanobot.session.display_history import HISTORY_GENERATION_METADATA_KEY
+from nanobot.session.sqlite_store import SessionConflictError
 from nanobot.utils.restart import (
     RestartNotice,
     consume_restart_notice_from_env,
@@ -1140,6 +1143,30 @@ class ChannelManager:
 
         merged = replace_outbound_event(first_msg, final_event, content=combined_content)
         return merged, non_matching
+
+    async def send_task_notice(self, msg: OutboundMessage) -> str | None:
+        channel = self.channels.get(msg.channel)
+        if channel is None:
+            raise DeliveryRejectedError("Task notice channel is unavailable")
+        sessions = self._session_manager
+        owner = msg.metadata.get("_session_key")
+        generation = msg.metadata.get("_session_generation")
+        if sessions is not None and isinstance(owner, str):
+            parent = await sessions.state.read_header(owner)
+            if parent is None or generation not in (None, parent.generation):
+                raise DeliveryRejectedError("Task notice belongs to a replaced conversation")
+            generation = parent.generation
+            msg = replace(msg, metadata={**msg.metadata, HISTORY_GENERATION_METADATA_KEY: generation})
+        async with self._outbound_sends:
+            message_id = await channel.send_task_notice(msg)
+        if sessions is not None and isinstance(owner, str) and isinstance(generation, str):
+            try:
+                await sessions.state.record_delivery(
+                    owner, msg.content, {"_channel_delivery": True}, expected_generation=generation,
+                )
+            except (OSError, SessionConflictError):
+                logger.warning("Could not record a delivered task notice")
+        return message_id
 
     async def _send_with_retry(
         self,

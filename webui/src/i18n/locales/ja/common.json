@@ -1822,6 +1822,7 @@
         "queued": "待機中",
         "running": "実行中",
         "stopping": "停止中",
+        "waiting_input": "返信待ち",
         "done": "完了",
         "incomplete": "未完了",
         "error": "失敗",

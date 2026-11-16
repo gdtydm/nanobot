@@ -1822,6 +1822,7 @@
         "queued": "Đang chờ",
         "running": "Đang chạy",
         "stopping": "Đang dừng",
+        "waiting_input": "Đang chờ bạn trả lời",
         "done": "Hoàn tất",
         "incomplete": "Chưa hoàn tất",
         "error": "Thất bại",

@@ -152,13 +152,13 @@ After a model request fails and automatic retries stop, the WebUI shows the fail
 
 ### Delegated work
 
-When nanobot delegates work to subagents, **Subtasks** appears above the message input while tasks are queued, running, or stopping. It stays within reach as the conversation scrolls, even after the main reply finishes or you send another message. Open it for live activity; on narrow screens it opens from the bottom. The task list scrolls independently of the conversation.
+When nanobot delegates work to subagents, **Subtasks** appears above the message input while tasks are queued, running, waiting for your reply, or stopping. It stays within reach as the conversation scrolls, even after the main reply finishes or you send another message. Open it for live activity. On narrow screens it opens from the bottom. The task list scrolls independently of the conversation.
 
 Finished tasks leave the live list when it is closed. If you are already reading the list, they remain until you close it. When all tasks finish with the list closed, a brief completion or failure summary appears and then disappears; focusing or hovering over it keeps it available.
 
 Saved results appear as compact, expandable records beside the requests that started the work, and scroll with the conversation. Tasks without a matching request in the displayed history remain under **Other tasks**. Refreshing or reopening the WebUI restores active work in the fixed entry and finished work in the conversation, without restarting tasks or bringing all old tasks back into the live list.
 
-Select a task for its read-only conversation and tool activity. Closing the details leaves it running; its stop button cancels only that task. Give follow-up instructions to nanobot in the main conversation.
+Select a task for its read-only conversation and tool activity. Codex tasks also show their reference, latest progress, and pending question. Closing the details leaves the task running. Its stop button cancels only that task. In the main conversation, name the task or use its reference to give follow-up instructions or answer a question.
 
 These controls appear when the connected host supports subagent tasks. See [Subagents](./concepts.md#subagents) for cancellation, saved history, and gateway restart behavior.
 

@@ -233,7 +233,7 @@ function TaskTree({ tasks, maxHeight }: { tasks: ObservedSubagentTask[]; maxHeig
         className="cursor-pointer rounded-lg transition-colors duration-150 hover:bg-muted/50 focus-within:bg-muted/50 motion-reduce:transition-none">
         <div className="flex min-w-0 items-center gap-0.5">
           <SubagentTaskButton task={task} surface="activity" />
-          {task.state === "queued" || task.state === "running" ? <HoverHint content={t("thread.subagents.stopTask", { label: task.label })}>
+          {task.state === "queued" || task.state === "running" || task.state === "waiting_input" ? <HoverHint content={t("thread.subagents.stopTask", { label: task.label })}>
             <Button type="button" variant="ghost" size="icon"
               className="h-11 w-11 shrink-0 rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive motion-reduce:transition-none sm:h-9 sm:w-9"
               aria-label={t("thread.subagents.stopTask", { label: task.label })} aria-busy={context.stoppingId === task.task_id}

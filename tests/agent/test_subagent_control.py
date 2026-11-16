@@ -1054,7 +1054,7 @@ async def test_cleanup_wait_is_bounded_and_repeated_cancel_does_not_interrupt_it
 def test_subagent_schema_exposes_task_actions(tmp_path):
     manager, _, _ = setup(tmp_path)
     properties = SubagentTool(manager).parameters["properties"]
-    assert properties["action"]["enum"] == ["create", "send", "cancel", "check"]
+    assert properties["action"]["enum"] == ["create", "prepare", "send", "cancel", "check"]
     assert "owner" not in properties
     tool = SubagentTool(manager)
     assert tool.validate_params({"action": "create", "task": "review"}) == []

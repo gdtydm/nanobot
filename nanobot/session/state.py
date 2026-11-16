@@ -488,7 +488,7 @@ class SessionState:
 
     async def create_child(
         self, parent_key: str, key: str, *, metadata: Mapping[str, Any],
-        content: str, policy: SessionPolicy,
+        content: str, policy: SessionPolicy, expected_parent_generation: str | None = None,
     ) -> Session:
         """Establish a child and its parent before execution leaves the owner."""
         values = deepcopy(dict(metadata))
@@ -496,6 +496,10 @@ class SessionState:
         def create() -> Session:
             def write() -> Session:
                 parent = self._load(parent_key, history=False)
+                if expected_parent_generation is not None and (
+                    parent is None or parent.generation != expected_parent_generation
+                ):
+                    raise SessionConflictError("child task belongs to a replaced session")
                 if parent is None:
                     with self._cache_lock:
                         if parent_key in self._retired:

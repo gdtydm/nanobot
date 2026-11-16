@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from nanobot.providers.base import LLMUsage
 
-SubagentState = Literal["queued", "running", "stopping", "done", "incomplete", "error", "cancelled", "interrupted"]
+SubagentState = Literal[
+    "queued", "running", "waiting_input", "stopping", "done", "incomplete", "error", "cancelled", "interrupted",
+]
+SubagentBackend = Literal["native", "codex"]
 
 
 class SubagentSessionError(ValueError):
@@ -44,6 +47,27 @@ class SubagentStatus:
     worktree: str | None = None
     branch: str | None = None
     reply_first: bool = False
+    backend: SubagentBackend = "native"
+    progress: str | None = None
+    progress_at: float | None = None
+    question: str | None = None
+    question_id: str | None = None
+    model: str | None = None
+    effort: str | None = None
+    cwd: str | None = None
+    codex_thread: str | None = None
+    codex_turn: str | None = None
+    origin_channel: str | None = None
+    origin_chat_id: str | None = None
+    origin_sender_id: str | None = None
+    origin_generation: str | None = None
+    origin_route: dict[str, Any] = field(default_factory=dict)
+    pending_inputs: list[tuple[str, str]] = field(default_factory=list)
+    notice_ids: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def reference(self) -> str:
+        return self.task_id[:8]
 
     def as_dict(self) -> dict[str, object]:
         """Serialize task observations without exposing ownership or resources."""
@@ -71,4 +95,12 @@ class SubagentStatus:
             "project": self.project,
             "worktree": self.worktree,
             "branch": self.branch,
+            "backend": self.backend,
+            "reference": self.reference,
+            "progress": self.progress,
+            "progress_at": self.progress_at,
+            "question": self.question,
+            "question_id": self.question_id if self.state == "waiting_input" else None,
+            "model": self.model,
+            "effort": self.effort,
         }

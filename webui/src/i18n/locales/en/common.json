@@ -2004,6 +2004,7 @@
         "queued": "Queued",
         "running": "Running",
         "stopping": "Stopping",
+        "waiting_input": "Waiting for your reply",
         "done": "Completed",
         "incomplete": "Incomplete",
         "error": "Failed",

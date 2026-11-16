@@ -1822,6 +1822,7 @@
         "queued": "대기 중",
         "running": "실행 중",
         "stopping": "중지 중",
+        "waiting_input": "답변 대기 중",
         "done": "완료",
         "incomplete": "미완료",
         "error": "실패",

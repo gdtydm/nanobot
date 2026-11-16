@@ -25,13 +25,19 @@ _CURRENT_MESSAGE_SENDS: ContextVar[set[tuple[str, str]] | None] = ContextVar(
 
 @contextmanager
 def capture_message_deliveries() -> Generator[set[tuple[str, str]], None, None]:
-    """Record successful MessageTool targets within one agent run."""
+    """Record successful tool deliveries within one agent run."""
     sends: set[tuple[str, str]] = set()
     token = _CURRENT_MESSAGE_SENDS.set(sends)
     try:
         yield sends
     finally:
         _CURRENT_MESSAGE_SENDS.reset(token)
+
+
+def record_message_delivery(channel: str, chat_id: str) -> None:
+    sends = _CURRENT_MESSAGE_SENDS.get()
+    if sends is not None:
+        sends.add((channel, chat_id))
 
 
 @tool_parameters(
@@ -245,9 +251,7 @@ class MessageTool(Tool):
 
         try:
             await self._send_callback(msg)
-            sends = _CURRENT_MESSAGE_SENDS.get()
-            if sends is not None:
-                sends.add((channel, chat_id))
+            record_message_delivery(channel, chat_id)
             media_info = f" with {len(media)} attachments" if media else ""
             button_info = (
                 f" with {sum(len(row) for row in button_rows)} button(s)"

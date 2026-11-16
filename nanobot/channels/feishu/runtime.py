@@ -2022,21 +2022,18 @@ class FeishuChannel(BaseChannel):
         return None
 
     def _send_message_sync(
-        self, receive_id_type: str, receive_id: str, msg_type: str, content: str
+        self, receive_id_type: str, receive_id: str, msg_type: str, content: str, *, request_uuid: str | None = None,
     ) -> str | None:
         from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 
         try:
+            body = CreateMessageRequestBody.builder().receive_id(receive_id).msg_type(msg_type).content(content)
+            if request_uuid is not None:
+                body = body.uuid(request_uuid)
             request = (
                 CreateMessageRequest.builder()
                 .receive_id_type(receive_id_type)
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(receive_id)
-                    .msg_type(msg_type)
-                    .content(content)
-                    .build()
-                )
+                .request_body(body.build())
                 .build()
             )
             response = self._client.im.v1.message.create(request)
@@ -2373,6 +2370,28 @@ class FeishuChannel(BaseChannel):
                 )
                 buf.card_id = None
 
+    async def send_task_notice(self, msg: OutboundMessage) -> str:
+        if not self._client:
+            raise ChannelNotReadyError("Feishu client is not ready")
+        request_uuid = uuid.uuid5(uuid.NAMESPACE_URL, str(msg.metadata["task_notice_id"])).hex
+        content = json.dumps({"text": msg.content}, ensure_ascii=False)
+        message_id = msg.metadata.get("message_id")
+        if isinstance(message_id, str) and (msg.metadata.get("thread_id") or self.config.reply_to_message):
+            from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody
+
+            body = ReplyMessageRequestBody.builder().msg_type("text").content(content).uuid(request_uuid)
+            request = ReplyMessageRequest.builder().message_id(message_id).request_body(body.build()).build()
+            response = await asyncio.to_thread(self._client.im.v1.message.reply, request)
+            sent_id = getattr(response.data, "message_id", None) if response.success() else None
+        else:
+            receive_id_type = "chat_id" if msg.chat_id.startswith("oc_") else "open_id"
+            sent_id = await asyncio.to_thread(
+                self._send_message_sync, receive_id_type, msg.chat_id, "text", content, request_uuid=request_uuid,
+            )
+        if not sent_id:
+            raise RuntimeError("Feishu did not confirm delivery of the task notice")
+        return sent_id
+
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Feishu, including media (images/files) if present."""
         if isinstance(msg.event, ContextCompactionEvent) and not (
@@ -2694,6 +2713,7 @@ class FeishuChannel(BaseChannel):
             root_id = root_id if isinstance(root_id, str) else None
             thread_id = thread_id if isinstance(thread_id, str) else None
 
+            reply_text = "\n".join(content_parts) if parent_id else None
             if parent_id and self._client:
                 loop = asyncio.get_running_loop()
                 reply_ctx = await loop.run_in_executor(
@@ -2743,6 +2763,8 @@ class FeishuChannel(BaseChannel):
                     "parent_id": parent_id,
                     "root_id": root_id,
                     "thread_id": thread_id,
+                    "task_reply_to": parent_id,
+                    "task_reply_text": reply_text,
                 },
                 session_key=session_key,
                 is_dm=chat_type == "p2p",

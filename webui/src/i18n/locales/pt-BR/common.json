@@ -1824,6 +1824,7 @@
         "queued": "Na fila",
         "running": "Em execução",
         "stopping": "Interrompendo",
+        "waiting_input": "Aguardando sua resposta",
         "done": "Concluída",
         "incomplete": "Incompleta",
         "error": "Falhou",

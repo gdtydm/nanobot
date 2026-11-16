@@ -1450,6 +1450,10 @@ class AgentLoop:
             return
         if msg.is_user_input:
             await self.runtime_event_publisher.user_input_accepted(msg, key)
+        task_reply = await self.subagents.route_task_reply(msg)
+        if task_reply is not None:
+            await self.bus.publish_outbound(task_reply)
+            return
         if msg.channel != "system" and self.commands.is_priority(raw):
             await self._dispatch_command_inline(msg, raw, self.commands.dispatch_priority)
             return

@@ -133,12 +133,12 @@ Provider 请求另有独立的 `tools` 参数，包含当前注册工具的名�
 
 主 Agent 在可用工具和用户工作流的指引下决定是否生成 `subagent` 工具调用。当前本机的 Location 工作流让主 Agent 直接处理单次查询和简单检查，把多步骤、适合并行或需要独立 worktree 的任务派给子 Agent。
 
-1. 模型返回 `subagent(action="create", project=..., wait=false)` 后，`SubagentTool` 读取当前请求的身份和 scope，调用 `SubagentManager.spawn()`。项目模式要求匹配配置的飞书私聊和项目。创建结果携带子任务 ID，主 Agent 可以先回接单信息。
+1. 模型返回 `subagent(action="create", project=..., wait=false)` 后，`SubagentTool` 读取当前请求的身份和 scope，调用 `SubagentManager.spawn()`。Gateway 校验当前会话是否在该项目的 `sessions` 列表里。本例的入口是飞书私聊。创建结果携带子任务 ID，主 Agent 可以先回接单信息。
 2. `SubagentManager._run_subagent()` 获得执行名额后创建或恢复项目 worktree，把它设为默认目录，沿用父 Agent 的访问模式与 shell 设置。子任务使用自己的提示词和工具运行器，并加载 worktree 根规则。系统提示词包含 `.agents/skills/` 中可用技能的名称、描述和路径。worktree 中的同名技能优先，配置仓库中的本地技能也可按需读取。
-3. 进度由 `SubagentTaskChanged` 发布，飞书的订阅模块把符合条件的项目状态变化发给原私聊。完成时 `_announce_result()` 把结果作为内部消息送回入站总线，并带上父会话键。主 Agent 根据结果继续当前回合或开启后续回合来汇报。
+3. 进度由 `SubagentTaskChanged` 发布，通用订阅模块把符合条件的原生项目任务状态发回来源会话。完成时 `_announce_result()` 把原生结果作为内部消息送回入站总线，并带上父会话键。主 Agent 根据结果继续当前回合或开启后续回合来汇报。Codex 委托的独立回执和续跑机制见 [Codex tasks](./concepts.md#codex-tasks)。
 4. 续做以旧执行 ID 定位项目与 worktree，再创建新的执行记录。源码还会检查已完成且满足清理条件的 worktree。符合保留策略的目录可回收，Git 分支保留，续做时可重新检出并尝试恢复已保存的初始化文件。
 
-[创建与控制](../nanobot/agent/tools/subagent.py#L123) · [子任务执行](../nanobot/agent/subagent.py#L809) · [项目 Skill](../nanobot/agent/subagent.py#L890) · [子任务结果回传](../nanobot/agent/subagent.py#L1014) · [飞书进度](../nanobot/channels/feishu/subagent_progress.py#L46) · [worktree 创建、恢复和回收](../nanobot/agent/subagent_project.py#L143)
+[创建与控制](../nanobot/agent/tools/subagent.py) · [子任务执行与结果回传](../nanobot/agent/subagent.py) · [通用进度通知](../nanobot/channels/subagent_progress.py) · [worktree 创建、恢复和回收](../nanobot/agent/subagent_project.py#L143)
 
 ## 7. 本地实际调用记录
 

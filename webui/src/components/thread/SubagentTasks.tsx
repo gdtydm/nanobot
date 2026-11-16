@@ -142,7 +142,7 @@ export function SubagentTasksProvider({ client, sessionKey, token, enabled, live
     }
   };
   const selected = enabled && active && paneVisible ? tasks.find((task) => task.task_id === selectedId) : undefined;
-  const canStopSelected = selected?.state === "queued" || selected?.state === "running";
+  const canStopSelected = selected?.state === "queued" || selected?.state === "running" || selected?.state === "waiting_input";
   const value: TaskContext = {
     sessionKey, available: enabled && active && paneVisible, detailOpen: !!selected,
     tasks: enabled ? tasks : [],
@@ -197,7 +197,8 @@ export function SubagentTasksProvider({ client, sessionKey, token, enabled, live
               {selected.error ? <p role="alert" className="whitespace-pre-wrap break-words text-destructive">{selected.error}</p> : null}
             </div> : null}
             <SubagentThread key={`${sessionKey}:${selected.task_id}`} token={token} sessionKey={sessionKey}
-              task={selected} historyEnabled={historyEnabled} traceEnabled={traceEnabled} isStreaming={isActiveSubagentTask(selected)} />
+              task={selected} historyEnabled={historyEnabled} traceEnabled={traceEnabled}
+              isStreaming={isActiveSubagentTask(selected) && selected.state !== "waiting_input"} />
           </div> : null}
         </SheetContent>
       </Sheet>
@@ -209,7 +210,7 @@ function TaskStateIcon({ task }: { task: SubagentTaskSnapshot }) {
   if (task.state === "running") return <LoadingRing className={`${className} text-muted-foreground`} />;
   if (task.state === "done") return <span className={`${className} block`} aria-hidden />;
   const Icon = {
-    queued: QueuedTaskIcon, stopping: StoppingTaskIcon,
+    queued: QueuedTaskIcon, waiting_input: QueuedTaskIcon, stopping: StoppingTaskIcon,
     cancelled: CancelledTaskIcon, incomplete: IncompleteTaskIcon,
     interrupted: InterruptedTaskIcon, error: ErrorTaskIcon,
   }[task.state];

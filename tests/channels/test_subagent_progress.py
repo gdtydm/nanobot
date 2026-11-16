@@ -5,13 +5,16 @@ import pytest
 from nanobot.agent.subagent_status import SubagentStatus
 from nanobot.bus.queue import MessageBus
 from nanobot.bus.runtime_events import RuntimeEventContext, SubagentTaskChanged
-from nanobot.channels.feishu.subagent_progress import FeishuSubagentProgress
+from nanobot.channels.subagent_progress import ProjectSubagentProgress
 
 
 @pytest.mark.asyncio
-async def test_project_progress_reaches_private_chat_once_per_stage_and_stops_at_completion():
+@pytest.mark.parametrize("ctx", [
+    RuntimeEventContext(channel="feishu.product", chat_id="ou_user", session_key="feishu.product:ou_user"),
+    RuntimeEventContext(channel="telegram", chat_id="-100", session_key="telegram:-100:16"),
+])
+async def test_project_progress_reaches_origin_once_per_stage_and_stops_at_completion(ctx):
     bus = MessageBus()
-    ctx = RuntimeEventContext(channel="feishu.product", chat_id="ou_user", session_key="feishu.product:ou_user")
     status = SubagentStatus(
         task_id="task", owner=ctx.session_key, label="LOC-42", task_description="Edit a project",
         started_at=0, project="location", worktree_id="task", state="running", phase="preparing_worktree",
@@ -23,7 +26,7 @@ async def test_project_progress_reaches_private_chat_once_per_stage_and_stops_at
         assert (task_id, owner) == (status.task_id, status.owner)
         return status
 
-    progress = FeishuSubagentProgress(bus, check, lambda *_: live, quiet_seconds=0.03)
+    progress = ProjectSubagentProgress(bus, check, lambda *_: live, quiet_seconds=0.03)
     try:
         await bus.publish(event)
         first = await asyncio.wait_for(bus.consume_outbound(), 1)

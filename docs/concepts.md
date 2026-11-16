@@ -172,17 +172,25 @@ Use `/stop` to stop the current session and its subagents. Other sessions are un
 
 Subagents belong to their original conversation. They do not appear as separate topics or in general conversation searches. Deleting the conversation stops its subagents and removes their saved history; forking it does not copy them.
 
-Saved task history and results remain available after a gateway restart. Unfinished tasks are marked interrupted, with saved partial results when available. Nanobot does not automatically resume them or resend completion notifications; ask it to start a new task to continue the work.
+Saved task history and partial results remain available after a gateway restart. In-flight execution is marked interrupted. A Codex task awaiting a decision keeps its pending question and continues when the user answers.
 
-Gateway operators can configure projects for a specific Feishu private conversation under `tools.subagent.projects`. Each entry names a local repository and the exact `feishuSession` (such as `feishu:ou_…`). Set `project` and `worktree=false` to run in the existing checkout with the project's root instructions and Skills. Set `worktree=true` for an isolated checkout using the configured `worktreeScript`. Existing callers that omit `worktree` use an isolated checkout when the project has a script. Both modes inherit the parent agent's workspace access mode and shell settings. Worktree tasks can send setup milestones and a quiet reminder, and a follow-up run can reuse a finished task's worktree with `resume_task_id`.
+Gateway operators can configure projects under `tools.subagent.projects`. Each entry names a local `repository` and a `sessions` list of exact conversation keys. This works across WebUI, TUI, CLI and messaging channels. An existing `feishuSession` is read as a legacy entry in that list. Set `project` and `worktree=false` to use the existing checkout, or set `worktree=true` for an isolated checkout using `worktreeScript`. Omitting `worktree` selects isolation when the project has a setup script. Native subagents inherit the parent workspace access mode and shell settings, and can send setup milestones and a quiet reminder.
 
 Project subagents discover `.agents/skills/<name>/SKILL.md` in the configured repository and, when used, the task worktree. For duplicate names, the worktree takes precedence, followed by the configured repository and then nanobot's usual skill sources. The first model request includes skill names, descriptions, and paths. The subagent reads the instructions and supporting files when needed. A restricted worktree can read the configured repository's skill directory. A configured shell sandbox also receives that directory as a read-only bind for skill scripts. Shell commands default to the selected checkout.
 
 The gateway checks retention at startup, after successful project tasks, and hourly. Across configured projects, it keeps up to 10 clean worktrees for successful tasks and expires them seven days after their latest completion. Running and interrupted tasks, worktrees with uncommitted changes, and worktrees with local outputs (including Git-ignored outputs) stay outside that limit. Older worktrees with local files and no saved setup snapshot are also kept.
 
-Reclaiming a checkout preserves its local branch, commits, and task history. To continue in Feishu, ask nanobot to resume the original task using its task ID. The `subagent` tool uses `resume_task_id` to reopen the checkout at the tip of the original branch and restore the setup files saved when it was created.
+Reclaiming a checkout preserves its local branch, commits, and task history. To continue a finished native task in its original conversation, ask nanobot to resume its task ID. The `subagent` tool uses `resume_task_id` to reopen the checkout at the tip of the original branch and restore its setup files.
 
 See [Delegated work in the WebUI](./webui.md#delegated-work) for progress and task details. WebUI temporary chats do not support subagents. SDK calls with `ephemeral=True` wait for delegated results without saving the temporary conversation or its subagent history.
+
+### Codex tasks
+
+Enable `tools.subagent.codex.enabled` on a gateway with an installed, authenticated Codex CLI. Set `executable` if the gateway cannot find `codex` on its PATH. Optional `model` and `effort` set the default for new tasks. The runner uses a workspace-write sandbox with approvals disabled and network access off by default. Enable `networkAccess` when the task needs networked tools. This configuration applies to Codex tasks across conversation surfaces.
+
+Ask “Have Codex compare the Beacon retrieval approaches offline” or use `/codex <task>`. The original chat receives one receipt with a task reference, followed by any questions and the terminal result. Ask for progress, give a follow-up, answer a question, or stop one task by naming it or its reference. In Feishu, Telegram, and Discord, quoting the receipt identifies the task and quoting a question identifies the pending question. A question releases the execution slot. The next answer starts a turn on the same Codex thread.
+
+Standalone CLI and SDK calls without background delivery wait for the current Codex turn to finish or ask a question. In a later call using the same persistent session, use the returned task reference to answer it. Stopping a Codex task interrupts its local turn. Remote jobs it already submitted retain their own lifecycle.
 
 ## Background Jobs
 

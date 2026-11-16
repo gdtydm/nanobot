@@ -512,6 +512,13 @@ class DiscordChannel(BaseChannel):
     ) -> None:
         self._compaction_notices[(chat_id, compaction_id)] = message
 
+    async def send_task_notice(self, msg: OutboundMessage) -> str:
+        channel = await self._resolve_channel(msg.chat_id)
+        if channel is None:
+            raise ChannelNotReadyError("Discord channel is not available")
+        sent = await channel.send(content=msg.content[:2000], allowed_mentions=discord.AllowedMentions.none())
+        return str(sent.id)
+
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Discord using discord.py."""
         client = self._client
@@ -809,6 +816,7 @@ class DiscordChannel(BaseChannel):
             "message_id": str(message.id),
             "guild_id": str(message.guild.id) if message.guild else None,
             "reply_to": reply_to,
+            "task_reply_to": reply_to,
         }
 
     def _should_respond_in_group(self, message: discord.Message, content: str) -> bool:

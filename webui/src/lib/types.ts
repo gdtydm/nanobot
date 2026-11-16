@@ -67,7 +67,7 @@ interface TurnUsage {
 
 export type RoundUsage = TurnUsage;
 
-export type SubagentTaskState = "queued" | "running" | "stopping" | "done" | "incomplete" | "error" | "cancelled" | "interrupted";
+export type SubagentTaskState = "queued" | "running" | "waiting_input" | "stopping" | "done" | "incomplete" | "error" | "cancelled" | "interrupted";
 
 export interface SubagentTaskSnapshot {
   task_id: string;
@@ -89,6 +89,12 @@ export interface SubagentTaskSnapshot {
   partial: boolean;
   stop_reason: string | null;
   error: string | null;
+  backend?: "native" | "codex";
+  reference?: string;
+  progress?: string | null;
+  progress_at?: number | null;
+  question?: string | null;
+  model?: string | null;
 }
 
 export interface SubagentTasksPayload {

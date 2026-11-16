@@ -1084,6 +1084,17 @@ class TelegramChannel(BaseChannel):
         # only before submission; otherwise it may duplicate a successful prefix.
         return isinstance(error, ChannelNotReadyError)
 
+    async def send_task_notice(self, msg: OutboundMessage) -> str:
+        app = await self._wait_for_app()
+        if app is None:
+            raise ChannelNotReadyError("Telegram bot not running")
+        thread_id = msg.metadata.get("message_thread_id")
+        sent = await self._call_with_retry(
+            app.bot.send_message, chat_id=int(msg.chat_id), text=msg.content[:4096],
+            message_thread_id=int(thread_id) if thread_id else None,
+        )
+        return str(sent.message_id)
+
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Telegram."""
         if isinstance(msg.event, ContextCompactionEvent) and not (
@@ -1986,6 +1997,7 @@ class TelegramChannel(BaseChannel):
             self.logger.debug("Downloaded message media to {}", current_media_paths[0])
 
         reply = getattr(message, "reply_to_message", None)
+        reply_text = "\n".join(content_parts)
         if reply is not None:
             reply_ctx = await self._extract_reply_context(message)
             reply_media, reply_media_parts = await self._download_message_media(reply)
@@ -2001,6 +2013,9 @@ class TelegramChannel(BaseChannel):
 
         str_chat_id = str(chat_id)
         metadata = self._build_message_metadata(message, user)
+        if reply is not None:
+            metadata["task_reply_to"] = str(reply.message_id)
+            metadata["task_reply_text"] = reply_text
         session_key = self._derive_topic_session_key(message)
 
         if media_group_id := getattr(message, "media_group_id", None):

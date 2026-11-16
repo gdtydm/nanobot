@@ -43,7 +43,7 @@ class _Progress:
     reminder: asyncio.Task[None]
 
 
-class FeishuSubagentProgress:
+class ProjectSubagentProgress:
     """Project task milestones and one quiet reminder per stage."""
 
     def __init__(
@@ -77,12 +77,6 @@ class FeishuSubagentProgress:
 
     async def _on_change(self, event: SubagentTaskChanged) -> None:
         ctx, task_id = event.context, event.task_id
-        if (
-            ctx.channel.split(".", 1)[0] != "feishu"
-            or not ctx.chat_id.startswith("ou_")
-            or ctx.session_key != f"{ctx.channel}:{ctx.chat_id}"
-        ):
-            return
         previous = self._stages.get(task_id)
         status = self._read(task_id, ctx)
         stage = _stage(status, previous.stage if previous else None) if status else None
@@ -123,4 +117,5 @@ class FeishuSubagentProgress:
         number = label[0] if label else status.task_id[:8]
         await self._bus.publish_outbound(OutboundMessage(
             channel=ctx.channel, chat_id=ctx.chat_id, content=f"任务 {number}：{message}",
+            metadata={**ctx.metadata, "message_id": status.origin_message_id},
         ))

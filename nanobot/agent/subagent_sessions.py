@@ -61,6 +61,7 @@ class SubagentSessions:
             status.owner, self.key(status.task_id),
             metadata={SESSION_TYPE_KEY: SUBAGENT.name, TASK_METADATA_KEY: self._payload(status)},
             content=status.task_description, policy=policy or SessionPolicy(),
+            expected_parent_generation=status.origin_generation,
         )
 
     async def save(self, status: SubagentStatus) -> bool:
@@ -144,6 +145,7 @@ class SubagentSessions:
                 status.tool_events = []
                 status.receipts = {key: "undelivered" if receipt == "accepted" else receipt
                                    for key, receipt in status.receipts.items()}
+                status.pending_inputs.clear()
                 await self.save(status)
             except (OSError, SubagentSessionError):
                 logger.exception("Could not recover subagent session {}", key)

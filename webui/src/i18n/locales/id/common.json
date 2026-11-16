@@ -1822,6 +1822,7 @@
         "queued": "Dalam antrean",
         "running": "Berjalan",
         "stopping": "Menghentikan",
+        "waiting_input": "Menunggu jawaban Anda",
         "done": "Selesai",
         "incomplete": "Belum selesai",
         "error": "Gagal",

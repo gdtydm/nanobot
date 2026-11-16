@@ -5,7 +5,7 @@ export interface ObservedSubagentTask extends SubagentTaskSnapshot {
 }
 
 export function isActiveSubagentTask(task: SubagentTaskSnapshot): boolean {
-  return task.state === "queued" || task.state === "running" || task.state === "stopping";
+  return task.state === "queued" || task.state === "running" || task.state === "stopping" || task.state === "waiting_input";
 }
 
 export function latestSubagentInputKey(messages: readonly UIMessage[]): string | null {
@@ -29,7 +29,10 @@ export function isSubagentTask(value: unknown): value is SubagentTaskSnapshot {
     && (value.revision === undefined || (typeof value.revision === "number" && Number.isSafeInteger(value.revision) && value.revision >= 0))
     && typeof value.label === "string" && typeof value.task_description === "string"
     && typeof value.phase === "string" && typeof value.state === "string"
-    && ["queued", "running", "stopping", "done", "incomplete", "error", "cancelled", "interrupted"].includes(value.state)
+    && ["queued", "running", "waiting_input", "stopping", "done", "incomplete", "error", "cancelled", "interrupted"].includes(value.state)
+    && (value.backend === undefined || value.backend === "native" || value.backend === "codex")
+    && (value.reference === undefined || typeof value.reference === "string")
+    && [value.progress, value.question, value.model].every((entry) => entry === undefined || nullableText(entry))
     && typeof value.elapsed_seconds === "number" && Number.isFinite(value.elapsed_seconds) && value.elapsed_seconds >= 0
     && typeof value.iteration === "number" && Number.isInteger(value.iteration) && value.iteration >= 0
     && typeof value.created_at === "number" && Number.isFinite(value.created_at)
