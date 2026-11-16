@@ -814,10 +814,26 @@ class SubagentManager:
                 origin_generation=request.session_generation,
             )
         if not request.can_receive_background_results:
-            await asyncio.shield(self._running_tasks[record.status.task_id])
+            status = await self.wait_for_codex_turn(record.status.task_id, owner)
+            return json.dumps(status.as_dict(), ensure_ascii=False), False
         elif self.send_task_notice is not None:
             await record.receipt_attempted.wait()
         return json.dumps(record.status.as_dict(), ensure_ascii=False), "receipt" in record.status.notice_ids
+
+    async def wait_for_codex_turn(self, task_id: str, owner: str) -> SubagentStatus:
+        """Keep a standalone caller alive through the next Codex result or question."""
+        status = self._owned_status(task_id, owner)
+        if status.backend != "codex":
+            raise SubagentControlError("task is not a Codex task")
+        execution = self._running_tasks.get(task_id)
+        if execution is not None:
+            try:
+                await asyncio.shield(execution)
+            except asyncio.CancelledError:
+                caller = asyncio.current_task()
+                if not execution.cancelled() or (caller is not None and caller.cancelling()):
+                    raise
+        return self.check(task_id, owner)
 
     @staticmethod
     def _check_codex_sender(status: SubagentStatus, sender_id: str | None) -> None:

@@ -161,38 +161,54 @@ async def test_codex_waiting_task_resumes_same_thread_after_restart(tmp_path, co
 
 
 class _DelegationProvider(LLMProvider):
+    def __init__(self, answer=None):
+        super().__init__(provider_name="offline-test")
+        self.answer = answer
+
     def get_default_model(self):
         return "test-model"
 
     async def chat(self, messages, tools=None, **kwargs):
         if messages[-1]["role"] == "tool":
             status = json.loads(messages[-1]["content"])
-            return LLMResponse(content=f"{status['reference']} {status['question']}")
+            status = status.get("task", status)
+            return LLMResponse(content=f"{status['reference']} {status['question'] or status['result']}")
+        arguments = self.answer or {"action": "create", "backend": "codex", "task": "Compare candidates"}
         return LLMResponse(
-            content=None, tool_calls=[ToolCallRequest(
-                id="delegate", name="subagent",
-                arguments={"action": "create", "backend": "codex", "task": "Compare candidates"},
-            )],
+            content=None,
+            tool_calls=[ToolCallRequest(id=f"codex_{arguments['action']}", name="subagent", arguments=arguments)],
         )
 
 
 @pytest.mark.asyncio
 async def test_codex_command_uses_shared_worker_from_direct_cli(tmp_path, codex_project):
     repo, executable = codex_project
-    sessions = SessionManager(repo, sessions_root=tmp_path / "cli-sessions")
-    loop = AgentLoop(
-        bus=MessageBus(), provider=_DelegationProvider(provider_name="offline-test"),
-        workspace=repo, session_manager=sessions, tools_config=ToolsConfig(
-            subagent=SubagentToolConfig(codex=CodexTaskConfig(enabled=True, executable=str(executable))),
-        ),
+    tools_config = ToolsConfig(
+        subagent=SubagentToolConfig(codex=CodexTaskConfig(enabled=True, executable=str(executable))),
     )
-    try:
-        reply = await loop.process_direct("/codex compare Beacon candidates")
-        status, = loop.subagents.statuses_for_session("cli:direct").values()
-        assert reply is not None and status.reference in reply.content
-        assert status.state == "waiting_input" and "Which date window?" in reply.content
-    finally:
-        await loop.aclose()
+
+    async def run_once(message, *, answer=None):
+        loop = AgentLoop(
+            bus=MessageBus(), provider=_DelegationProvider(answer),
+            workspace=repo, session_manager=SessionManager(repo, sessions_root=tmp_path / "cli-sessions"),
+            tools_config=tools_config, max_iterations=4,
+        )
+        try:
+            reply = await loop.process_direct(message)
+            status, = loop.subagents.statuses_for_session("cli:direct").values()
+            return reply, status
+        finally:
+            await loop.aclose()
+
+    reply, pending = await run_once("/codex compare Beacon candidates")
+    assert reply is not None and pending.reference in reply.content
+    assert pending.state == "waiting_input" and "Which date window?" in reply.content
+
+    reply, completed = await run_once("Use January", answer={
+        "action": "send", "task_id": pending.reference, "question_id": pending.question_id, "message": "January",
+    })
+    assert completed.state == "done" and completed.codex_thread == pending.codex_thread
+    assert reply is not None and "Evaluated in the original thread" in reply.content
 
 
 @pytest.mark.asyncio

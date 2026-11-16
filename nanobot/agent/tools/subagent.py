@@ -176,14 +176,20 @@ class SubagentTool(Tool):
             if action in {"send", "cancel"}:
                 if not task_id:
                     return ToolResult.error(f"Error: {action} requires task_id")
-                task_id = (await self._manager.resolve_task(task_id, owner, sender_id=sender_id)).task_id
+                target = await self._manager.resolve_task(task_id, owner, sender_id=sender_id)
+                task_id = target.task_id
                 if action == "send":
                     input_id = (request.message_id or request.turn_id) if request else None
-                    return json.dumps(await self._manager.send(
+                    receipt = await self._manager.send(
                         task_id, owner, message, sender_id=sender_id,
                         input_id=str(input_id) if input_id else None,
                         question_id=question_id,
-                    ))
+                    )
+                    if (target.backend == "codex" and question_id and request is not None
+                            and not request.can_receive_background_results):
+                        result = await self._manager.wait_for_codex_turn(task_id, owner)
+                        return json.dumps({**receipt, "task": result.as_dict()}, ensure_ascii=False)
+                    return json.dumps(receipt)
                 status = await self._manager.cancel(task_id, owner, sender_id=sender_id)
                 return json.dumps(status.as_dict(), ensure_ascii=False)
             return ToolResult.error("Error: unknown subagent action")
