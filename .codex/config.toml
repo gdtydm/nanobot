@@ -1,0 +1,3 @@
+# Project-scoped Codex MCP services. Codex loads this file for a trusted project.
+[mcp_servers.deepwiki]
+url = "https://mcp.deepwiki.com/mcp"
