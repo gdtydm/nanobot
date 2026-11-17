@@ -33,10 +33,21 @@ if TYPE_CHECKING:
     ),
     task=StringSchema("Required for create: the task for the subagent to complete.", min_length=1),
     label=StringSchema("Display label for create."),
-    backend=StringSchema("Execution backend for create. Codex requires gateway configuration.", enum=("native", "codex")),
+    backend=StringSchema(
+        "Backend for create. native is the default and uses the parent model and nanobot tools. "
+        "codex runs in a Codex thread and requires a gateway that enables it, a persistent conversation, "
+        "and a sender identity.",
+        enum=("native", "codex"),
+    ),
     query=StringSchema("For check, send, or cancel: task reference, title, or project within this conversation."),
-    question_id=StringSchema("For send: the pending question ID returned by check, when answering a specific question."),
-    project=StringSchema("For create: a gateway-configured project whose rules, skills, and working directory apply."),
+    question_id=StringSchema(
+        "For send to a Codex task in waiting_input. Pass its current question ID from check to answer "
+        "and continue the task."
+    ),
+    project=StringSchema(
+        "For create: a gateway-configured project that selects the working directory. Native loads the "
+        "project rules and skills. Codex uses its own agent context in the selected checkout."
+    ),
     worktree=BooleanSchema(
         description=(
             "For a project create: false uses the existing repository checkout; true uses an isolated Git worktree. "
@@ -44,8 +55,9 @@ if TYPE_CHECKING:
         ),
     ),
     resume_task_id=StringSchema(
-        "On create, pass the full ID of a finished task in this conversation. Native resume reuses its project "
-        "worktree. With backend=codex, continue the saved Codex thread and checkout when available."
+        "On create, pass the full ID of a finished task in this conversation. Native requires the original "
+        "project and a prepared worktree, which it reuses in a fresh task. With backend=codex, pass a finished "
+        "Codex task to reuse its saved thread and checkout when available. Put remaining work in task."
     ),
     base_ref=StringSchema(
         "Git revision for a new project worktree, such as origin/main or a commit ID. Defaults to HEAD.",
@@ -56,20 +68,22 @@ if TYPE_CHECKING:
         min_length=1,
     ),
     temperature=NumberSchema(
-        description="Sampling temperature for create; inherits the parent's runtime if omitted.",
+        description="Sampling temperature for native create. Defaults to the parent runtime's temperature.",
         minimum=0.0,
         maximum=2.0,
     ),
     wait=BooleanSchema(
         description=(
-            "For create: true waits for the result; false runs in background with a completion notification. "
-            "Temporary sessions and hosts unable to receive background results always wait."
+            "For native create: true waits for the result. false runs in the background in a persistent "
+            "conversation that supports background results. Otherwise, native waits inline. Native worktrees "
+            "require background execution with wait=false. Codex decides from the caller's ability to receive "
+            "background results."
         ),
         default=False,
     ),
     reply_first=BooleanSchema(
         description=(
-            "For background create: deliver the main agent's current reply before reporting this task's result. "
+            "For native background create: deliver the main agent's current reply before reporting the result. "
             "Use when a verified finding can be shared while dependent work runs. Requires wait=false "
             "and a conversation that can receive background results."
         ),
@@ -106,20 +120,23 @@ class SubagentTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Manage the current session's private subagent tasks. "
-            "When using Codex, resolve the configured project and task criteria, read applicable "
-            "project instructions, and create with backend=codex. "
-            "To continue a finished Codex task, use create with backend=codex and resume_task_id. "
-            "Put the remaining work and any undelivered instructions in task. If the worktree changed branches, "
-            "use adopt_branch with the intended checked-out branch when continuing. "
-            "Use check for natural-language progress queries and configured project discovery. "
-            "If a query finds multiple matches, ask which one. "
-            "Use send to supplement or answer and cancel to stop the identified task. "
-            "Read the pending question with check and pass its question_id when sending an answer. "
-            "Codex background tasks send their own receipt, questions and terminal notice. Avoid duplicating these notices. "
-            "Background results arrive automatically; avoid repeated polling. "
-            "Check with a known task_id to read older results. "
-            "Partial results or iteration limits do not mean completion."
+            "Delegate multi-step or time-consuming work in the current conversation. Use create with the task scope, "
+            "constraints, and expected result. For configured projects, set project and worktree explicitly.\n\n"
+            "Native is the default. It uses the parent model and nanobot tools. Use wait=false for background work "
+            "when supported, or wait=true for an inline result. Native worktrees require background execution. To "
+            "continue in a finished task's prepared worktree, use create with the original project and resume_task_id. "
+            "Give the new task the remaining work and relevant context.\n\n"
+            "Use backend=codex when the task needs Codex and the gateway enables it. Read applicable project "
+            "instructions first. Codex requires a persistent conversation and sender identity. It waits for a result "
+            "or question when the caller cannot receive background results. To continue a finished Codex task, use "
+            "create with backend=codex and resume_task_id to reopen its saved thread when available. Codex can "
+            "also resume tasks started without a worktree.\n\n"
+            "Use send to add instructions to queued or running tasks. If Codex pauses in waiting_input, get its "
+            "question_id with check and include it in send with the answer. "
+            "Use check to discover projects, find tasks, or read status and results by task_id. Use cancel to stop a task. "
+            "If several tasks match, ask the user which one before sending or cancelling. "
+            "Supported channels deliver background results automatically. Codex sends its own receipts, questions, "
+            "and terminal notices. Verify the outcome before reporting completion."
         )
 
     @property
