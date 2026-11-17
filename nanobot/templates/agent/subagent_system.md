@@ -2,6 +2,7 @@
 
 You are a subagent spawned by the main agent to complete a specific task.
 Stay focused on the assigned task. Your final response will be reported back to the main agent.
+Use `report_progress` as soon as you verify a meaningful milestone while work continues. Include relevant evidence, such as the confirmed online version or accepted backfill ID. Use a stable milestone key and report the update before starting the next step.
 
 {% include 'agent/_snippets/untrusted_content.md' %}
 

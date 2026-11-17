@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from typing import Any, cast
@@ -121,21 +122,31 @@ class SubagentSessions:
                 result[task_id] = status
         return result
 
-    async def interrupt_pending(self) -> None:
-        """Seal abandoned work after the gateway acquires execution ownership."""
-        for row in self.sessions.list_sessions():
+    def load_all(self) -> list[SubagentStatus]:
+        """Read persisted task status across conversations for gateway maintenance."""
+        statuses: list[SubagentStatus] = []
+        for row in self.sessions.list_session_metadata():
             key = row["key"]
-            payload = self.sessions.read_session_metadata(key)
-            metadata = (payload or {}).get("metadata", {})
-            if metadata.get(SESSION_TYPE_KEY) != SUBAGENT.name:
+            if not key.startswith("subagent:"):
                 continue
+            metadata = row["metadata"]
             owner = metadata.get(PARENT_SESSION_KEY)
             if not isinstance(owner, str):
                 continue
             try:
-                status = self.status(key.removeprefix("subagent:"), owner)
-                if status is None or status.state not in _ACTIVE_STATES:
-                    continue
+                status = self._status_from_metadata(key.removeprefix("subagent:"), owner, metadata)
+                if status is not None:
+                    statuses.append(status)
+            except SubagentSessionError:
+                logger.exception("Could not read subagent session {}", key)
+        return statuses
+
+    async def interrupt_pending(self) -> None:
+        """Seal abandoned work after the gateway acquires execution ownership."""
+        for status in await asyncio.to_thread(self.load_all):
+            if status.state not in _ACTIVE_STATES:
+                continue
+            try:
                 status.state = status.phase = "interrupted"
                 status.revision += 1
                 status.stop_reason = "host_restarted"
@@ -147,5 +158,5 @@ class SubagentSessions:
                                    for key, receipt in status.receipts.items()}
                 status.pending_inputs.clear()
                 await self.save(status)
-            except (OSError, SubagentSessionError):
-                logger.exception("Could not recover subagent session {}", key)
+            except OSError:
+                logger.exception("Could not recover subagent session {}", self.key(status.task_id))

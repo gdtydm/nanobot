@@ -278,6 +278,77 @@ async def test_default_loop_keeps_slack_thread_for_late_subagent_result(
 
 
 @pytest.mark.asyncio
+async def test_waiting_parent_gets_verified_milestones_before_native_child_finishes(loop_factory, monkeypatch):
+    loop = loop_factory()
+    loop.provider.provider_name = "test"
+    monkeypatch.setattr("nanobot.agent.loop._SUBAGENT_TERMINAL_WAIT_SECONDS", 5)
+    parent_waiting = asyncio.Event()
+    release_child = asyncio.Event()
+    parent_calls = 0
+    should_wait = loop.subagents.should_wait_for_results
+    version = "Verified online version 1"
+    backfill = "Accepted backfill 3292731"
+
+    def observe_wait(session_key, turn_id):
+        waiting = should_wait(session_key, turn_id)
+        if waiting:
+            parent_waiting.set()
+        return waiting
+
+    def report(key, summary):
+        return ToolCallRequest(
+            id=key, name="report_progress", arguments={"milestone": key, "summary": summary},
+        )
+
+    async def respond(**kwargs):
+        nonlocal parent_calls
+        messages = kwargs["messages"]
+        transcript = str(messages)
+        tools = {tool["function"]["name"] for tool in kwargs.get("tools") or []}
+        if "subagent" not in tools:
+            assert "report_progress" in tools
+            await parent_waiting.wait()
+            if not any(m["role"] == "tool" for m in messages):
+                return LLMResponse(content=None, tool_calls=[report("published", version), report("backfilled", backfill)])
+            await release_child.wait()
+            return LLMResponse(content="Child terminal result")
+
+        assert "report_progress" not in tools
+        parent_calls += 1
+        if parent_calls == 1:
+            return LLMResponse(content=None, tool_calls=[ToolCallRequest(
+                id="delegate", name="subagent",
+                arguments={"action": "create", "task": "Publish and backfill", "wait": False},
+            )])
+        if version in transcript and backfill in transcript:
+            assert "Child terminal result" not in transcript
+            return LLMResponse(content="Version 1 is online and backfill 3292731 was submitted.")
+        return LLMResponse(content="Deployment is pending.")
+
+    async def next_reply():
+        while True:
+            message = await loop.bus.consume_outbound()
+            if message.event is None:
+                return message
+
+    monkeypatch.setattr(loop.subagents, "should_wait_for_results", observe_wait)
+    loop.provider.chat_stream_with_retry = respond
+    consumer = asyncio.create_task(loop.run())
+    message = InboundMessage(channel="slack", sender_id="user", chat_id="c", content="Check release")
+    try:
+        await loop.bus.publish_inbound(message)
+        reply = await asyncio.wait_for(next_reply(), timeout=20)
+        status, = loop.subagents.statuses_for_session(message.session_key).values()
+        assert status.state == "running"
+        assert status.progress == backfill
+        assert reply.content == "Version 1 is online and backfill 3292731 was submitted."
+    finally:
+        release_child.set()
+        loop.stop()
+        await asyncio.wait_for(consumer, timeout=20)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("child_finishes_first", [False, True], ids=["still-running", "already-queued"])
 async def test_reply_first_delivers_findings_then_background_results(loop_factory, monkeypatch, child_finishes_first):
     loop = loop_factory()
@@ -1054,7 +1125,7 @@ async def test_cleanup_wait_is_bounded_and_repeated_cancel_does_not_interrupt_it
 def test_subagent_schema_exposes_task_actions(tmp_path):
     manager, _, _ = setup(tmp_path)
     properties = SubagentTool(manager).parameters["properties"]
-    assert properties["action"]["enum"] == ["create", "prepare", "send", "cancel", "check"]
+    assert properties["action"]["enum"] == ["create", "send", "cancel", "check"]
     assert "owner" not in properties
     tool = SubagentTool(manager)
     assert tool.validate_params({"action": "create", "task": "review"}) == []

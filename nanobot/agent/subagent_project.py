@@ -44,12 +44,12 @@ async def _run(command: list[str], cwd: Path) -> str:
     return os.fsdecode(stdout)
 
 
-def _checkout(agent_workspace: Path, worktree_id: str) -> ProjectWorktree:
+def _checkout(agent_workspace: Path, worktree_id: str, branch: str | None = None) -> ProjectWorktree:
     worktree_id = str(UUID(worktree_id))
     path = agent_workspace.resolve() / "location-tasks" / f"native-{worktree_id}" / "worktree"
     if path.resolve() != path:
         raise RuntimeError("Project task directory must not contain symlinks")
-    return ProjectWorktree(path, f"codex/location-{worktree_id}")
+    return ProjectWorktree(path, branch or f"codex/location-{worktree_id}")
 
 
 async def _verify_checkout(repository: Path, worktree: ProjectWorktree) -> None:
@@ -61,9 +61,16 @@ async def _verify_checkout(repository: Path, worktree: ProjectWorktree) -> None:
     if (
         Path((await _run(git_common, path)).strip()).resolve(strict=True) != common_dir
         or Path((await _run(["git", "rev-parse", "--show-toplevel"], path)).strip()).resolve() != path
-        or (await _run(["git", "symbolic-ref", "--short", "HEAD"], path)).strip() != worktree.branch
     ):
-        raise RuntimeError("Project worktree no longer matches its repository and branch")
+        raise RuntimeError("Project worktree no longer matches its repository or directory")
+    ref = (await _run(["git", "rev-parse", "--symbolic-full-name", "HEAD"], path)).strip()
+    if ref != f"refs/heads/{worktree.branch}":
+        actual = "detached HEAD" if ref == "HEAD" else ref.removeprefix("refs/heads/")
+        commit = (await _run(["git", "rev-parse", "--verify", "HEAD"], path)).strip()
+        raise RuntimeError(
+            f"Project worktree branch mismatch (expected {worktree.branch!r}, "
+            f"checked out {actual!r}, commit {commit})"
+        )
 
 
 async def _untracked(path: Path, *, ignored_only: bool = False) -> list[str]:
@@ -145,24 +152,37 @@ async def prepare_project_worktree(
     agent_workspace: Path,
     worktree_id: str,
     *,
-    resume: bool,
+    resume: ProjectWorktree | None = None,
+    base_ref: str | None = None,
+    adopt_branch: str | None = None,
 ) -> ProjectWorktree:
     """Provision or reopen the trusted checkout before exposing it to model tools."""
     repository = config.repository.expanduser().resolve(strict=True)
-    worktree = _checkout(agent_workspace, worktree_id)
+    worktree = _checkout(agent_workspace, worktree_id, resume.branch if resume else None)
     path = worktree.path
+    if resume is not None and path != resume.path:
+        raise RuntimeError("Project worktree no longer matches its saved directory")
+    if adopt_branch is not None:
+        if not path.is_dir():
+            raise RuntimeError("Adopting a branch requires the existing project worktree")
+        worktree = ProjectWorktree(path, adopt_branch)
     restoring = path.parent / ".restoring-worktree"
     if restoring.is_symlink():
         raise RuntimeError("Project worktree recovery marker must not be a symlink")
-    if not resume:
+    if resume is None:
         if config.worktree_script is None:
             raise RuntimeError("No worktree setup script is configured for this project")
         script = config.worktree_script.expanduser().resolve(strict=True)
         if not repository.is_dir() or not script.is_file():
             raise RuntimeError("Project repository or worktree script is invalid")
+        ref = "HEAD"
+        if base_ref is not None:
+            ref = (await _run([
+                "git", "rev-parse", "--verify", "--end-of-options", f"{base_ref}^{{commit}}",
+            ], repository)).strip()
         path.parent.mkdir(parents=True, exist_ok=False)
         await _run([
-            "python3", str(script), str(path), "--repo", str(repository), "--branch", worktree.branch, "--ref", "HEAD",
+            "python3", str(script), str(path), "--repo", str(repository), "--branch", worktree.branch, "--ref", ref,
         ], repository)
     elif not path.exists():
         # Verify the original branch exists. Git keeps it when removing a checkout.
@@ -171,7 +191,7 @@ async def prepare_project_worktree(
         await _run(["git", "worktree", "add", "--", str(path), worktree.branch], repository)
 
     await _verify_checkout(repository, worktree)
-    if not resume:
+    if resume is None:
         try:
             names = await _untracked(path, ignored_only=True)
             if names:
@@ -185,10 +205,9 @@ async def prepare_project_worktree(
 
 
 async def removable_project_worktree(
-    config: SubagentProjectConfig, agent_workspace: Path, worktree_id: str,
+    config: SubagentProjectConfig, worktree: ProjectWorktree,
 ) -> ProjectWorktree | None:
     """Return a checkout with clean tracked files and only unchanged setup files."""
-    worktree = _checkout(agent_workspace, worktree_id)
     path = worktree.path
     if not path.exists() or (path.parent / ".restoring-worktree").exists():
         return None
@@ -235,15 +254,17 @@ async def reclaim_project_worktrees(
     ):
         config = projects.get(status.project) if status.project is not None else None
         if (
-            config is None or not config.allows(status.owner) or status.state != "done"
+            config is None or status.state != "done"
             or status.completed_at is None or worktree_id in active or in_use(worktree_id)
         ):
             continue
         try:
-            expected = _checkout(workspace, worktree_id)
-            if status.worktree != str(expected.path) or status.branch != expected.branch:
+            if status.branch is None:
                 continue
-            worktree = await removable_project_worktree(config, workspace, worktree_id)
+            expected = _checkout(workspace, worktree_id, status.branch)
+            if status.worktree != str(expected.path):
+                continue
+            worktree = await removable_project_worktree(config, expected)
             if worktree is None or in_use(worktree_id):
                 continue
             if now - status.completed_at < _RETENTION_SECONDS and kept < _RETAIN_COMPLETED:

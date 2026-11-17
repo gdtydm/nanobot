@@ -19,7 +19,7 @@
 
 ## 本机配置和验收状态
 
-- 本机 `~/.nanobot/config.json` 的 `tools.subagent.projects` 配置仓库、准备脚本和允许的飞书私聊。子任务的 shell 设置取自 `tools.exec`。本机 `~/.nanobot/workspace/USER.md` 让主 Agent 先判断是否派发。单次查询、简单检查和可快速验证的小改动由主 Agent 直接处理，需要多步骤、并行或独立 worktree 的任务再派给子 Agent。[配置定义](../nanobot/agent/tools/subagent_config.py) · [Gateway 接线](../nanobot/cli/gateway_runtime.py)
+- 本机 `~/.nanobot/config.json` 的 `tools.subagent.projects` 配置仓库和准备脚本。子任务的 shell 设置取自 `tools.exec`。本机 `~/.nanobot/workspace/USER.md` 让主 Agent 先判断是否派发。单次查询、简单检查和可快速验证的小改动由主 Agent 直接处理，需要多步骤、并行或独立 worktree 的任务再派给子 Agent。[配置定义](../nanobot/agent/tools/subagent_config.py) · [Gateway 接线](../nanobot/cli/gateway_runtime.py)
 - 初版共通过 **259 项相关测试**。权限继承变更的回归测试覆盖主 Agent 有无工作区限制两种情况，并检查并行任务的 worktree 与续做路径。[项目任务测试](../tests/agent/test_subagent_project.py) · [规则测试](../tests/agent/test_context_builder.py) · [进度测试](../tests/channels/test_subagent_progress.py)
 - 2026-11-12 19:46（北京时间），在隔离会话中启动真实项目子 Agent，复用原 worktree 并确认目录外的旧报告可读。通过子任务的 shell 工具执行只读 `bytedcli dorado instance get 1591530160 --region sg`，退出码为 0，Dorado 返回 `succeed`。
 - 正在运行的飞书 gateway 需要重启后加载权限继承逻辑。

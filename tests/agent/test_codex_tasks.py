@@ -1,13 +1,18 @@
 import asyncio
 import json
+import subprocess
 import sys
+from dataclasses import replace
+from pathlib import Path
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.memory import Consolidator
 from nanobot.agent.subagent import SubagentControlError, SubagentManager
+from nanobot.agent.subagent_project import reclaim_project_worktrees
 from nanobot.agent.tools.context import RequestContext, request_context
 from nanobot.agent.tools.subagent import SubagentTool
 from nanobot.agent.tools.subagent_config import (
@@ -20,16 +25,18 @@ from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import ToolsConfig
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.session.manager import SessionManager
+from nanobot.utils.llm_runtime import LLMRuntime
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="test App Server uses a POSIX executable script")
 
 
 @pytest.fixture
-def codex_project(tmp_path):
+def codex_project(tmp_path, request):
     repo = tmp_path / "beacon"
     repo.mkdir()
     cli = tmp_path / "codex"
-    cli.write_text(f"#!{sys.executable}\n" + """
+    expected_network_access = getattr(request, "param", True)
+    cli.write_text(f"#!{sys.executable}\nnetwork_access = {expected_network_access!r}\n" + """
 import json
 import sys
 from pathlib import Path
@@ -45,6 +52,7 @@ def finish(thread, turn, state, summary, question=None):
 
 thread = "beacon-original"
 turn = ""
+resumed_thread = False
 for line in sys.stdin:
     msg = json.loads(line)
     method, params = msg["method"], msg.get("params", {})
@@ -52,12 +60,18 @@ for line in sys.stdin:
         continue
     if method in ("thread/start", "thread/resume"):
         assert Path(params["cwd"]) == Path.cwd()
-        if method == "thread/resume":
+        assert params["sandbox"] == "workspace-write"
+        assert params["approvalPolicy"] == "on-request" and params["approvalsReviewer"] == "auto_review"
+        resumed_thread = method == "thread/resume"
+        if resumed_thread:
             assert params["threadId"] == thread
         result = {"thread": {"id": thread}, "model": "test-model", "reasoningEffort": "high"}
     elif method == "turn/start":
         assert params["threadId"] == thread and params["effort"] == "high"
-        assert params["outputSchema"] and params["sandboxPolicy"]["type"] == "workspaceWrite"
+        assert params["approvalPolicy"] == "on-request" and params["approvalsReviewer"] == "auto_review"
+        assert params["outputSchema"] and params["sandboxPolicy"] == {
+            "type": "workspaceWrite", "writableRoots": [str(Path.cwd())], "networkAccess": network_access,
+        }
         text = params["input"][0]["text"]
         turn = "resume" if "Continue the same task" in text else "initial"
         result = {"turn": {"id": turn}}
@@ -69,7 +83,7 @@ for line in sys.stdin:
     emit({"id": msg["id"], "result": result})
     if method == "turn/start":
         if turn == "resume":
-            assert "January" in text
+            assert resumed_thread and "January" in text
             finish(thread, turn, "done", "Evaluated in the original thread")
         elif "keep running" not in text:
             finish(thread, turn, "needs_input", "Candidates ready", "Which date window?")
@@ -93,7 +107,7 @@ async def test_codex_waiting_task_resumes_same_thread_after_restart(tmp_path, co
     sessions = SessionManager(workspace, sessions_root=tmp_path / "sessions")
     await sessions.state.get(owner)
     config = ToolsConfig(subagent=SubagentToolConfig(
-        projects={"beacon": SubagentProjectConfig(repository=repo, sessions=[owner])},
+        projects={"beacon": SubagentProjectConfig(repository=repo)},
         codex=CodexTaskConfig(enabled=True, executable=str(executable)),
     ))
     notices: asyncio.Queue[OutboundMessage] = asyncio.Queue()
@@ -114,11 +128,13 @@ async def test_codex_waiting_task_resumes_same_thread_after_restart(tmp_path, co
     manager = new_manager()
     context = RequestContext(
         channel=channel, chat_id=chat_id, session_key=owner, sender_id="owner",
-        message_id="request", original_user_text="让 Codex 做 Beacon 离线评估",
+        message_id="request", original_user_text="继续做 Beacon 离线评估",
     )
     try:
         with request_context(context):
-            result = json.loads(await SubagentTool(manager).execute(
+            tool = SubagentTool(manager)
+            assert json.loads(await tool.execute(action="check"))["projects"] == {"beacon": str(repo)}
+            result = json.loads(await tool.execute(
                 action="create", backend="codex", task="Compare candidates", label="Beacon evaluation", project="beacon",
             ))
         task_id = result["task_id"]
@@ -160,6 +176,126 @@ async def test_codex_waiting_task_resumes_same_thread_after_restart(tmp_path, co
         await sessions.state.aclose()
 
 
+@pytest.mark.asyncio
+async def test_codex_continues_terminal_task_on_adopted_worktree_branch(tmp_path, codex_project):
+    repo, executable = codex_project
+
+    def git(path, *args):
+        return subprocess.check_output(
+            ["git", "-C", str(path), "-c", "user.name=Test", "-c", "user.email=test@example.com", *args],
+            text=True,
+        ).strip()
+
+    git(repo, "init", "-q")
+    (repo / "tracked.txt").write_text("chosen baseline")
+    git(repo, "add", "tracked.txt")
+    git(repo, "commit", "-qm", "Baseline")
+    base_commit = git(repo, "rev-parse", "HEAD")
+    git(repo, "update-ref", "refs/remotes/origin/main", base_commit)
+    (repo / "tracked.txt").write_text("unrelated branch tip")
+    git(repo, "commit", "-qam", "Unrelated")
+    setup = tmp_path / "setup.py"
+    setup.write_text(
+        "import subprocess, sys\n"
+        "path, _, repo, _, branch, _, ref = sys.argv[1:]\n"
+        "subprocess.run(['git', '-C', repo, 'worktree', 'add', '-b', branch, path, ref], check=True)\n"
+    )
+    project = SubagentProjectConfig(repository=repo, worktree_script=setup)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    owner = "cli:direct"
+
+    def start_manager():
+        sessions = SessionManager(workspace, sessions_root=tmp_path / "sessions")
+        return SubagentManager(
+            workspace=workspace, bus=MessageBus(), max_tool_result_chars=8192,
+            consolidator=MagicMock(spec=Consolidator), session_manager=sessions,
+            tools_config=ToolsConfig(subagent=SubagentToolConfig(
+                projects={"beacon": project}, codex=CodexTaskConfig(enabled=True, executable=str(executable)),
+            )),
+        ), sessions
+
+    manager, sessions = start_manager()
+    await sessions.state.get(owner)
+    request = RequestContext(
+        "cli", "direct", session_key=owner, sender_id="owner", message_id="create",
+        original_user_text="Run the evaluation", can_receive_background_results=False,
+    )
+
+    async def use_tool(input_id, *, sender="owner", **kwargs):
+        with request_context(replace(request, message_id=input_id, sender_id=sender)):
+            return await SubagentTool(manager).execute(**kwargs)
+
+    try:
+        original = json.loads(await use_tool(
+            "create", action="create", backend="codex", task="Compare candidates",
+            project="beacon", worktree=True, base_ref="origin/main",
+        ))
+        assert original["state"] == "waiting_input"
+        original_id = original["task_id"]
+        path = Path(original["worktree"])
+        assert git(path, "rev-parse", "HEAD") == base_commit
+        git(path, "switch", "-c", "review/clean")
+        notes = path / "notes.txt"
+        notes.write_text("Local work from the first turn")
+        reply = json.loads(await use_tool(
+            "answer", action="send", task_id=original_id, question_id=original["question_id"], message="January",
+        ))
+        failed = reply["task"]
+        assert failed["state"] == "error" and failed["receipts"] == {"answer": "undelivered"}
+        assert all(value in failed["error"] for value in (original["branch"], "review/clean", base_commit))
+        await manager.close()
+        await sessions.state.aclose()
+
+        manager, sessions = start_manager()
+        continuation = {
+            "action": "create", "backend": "codex", "resume_task_id": original_id,
+            "task": "Evaluate January using the existing notes.",
+        }
+        rejected = await use_tool("resume-other", sender="other", **continuation)
+        assert "task unavailable" in rejected
+        mismatch = json.loads(await use_tool("resume", **continuation))
+        assert mismatch["state"] == "error" and "branch mismatch" in mismatch["error"]
+        continuation["adopt_branch"] = "review/clean"
+        result = json.loads(await use_tool("resume", **continuation))
+        assert result["state"] == "done" and result["resume_task_id"] == original_id
+        assert result["task_id"] != original_id and result["worktree"] == str(path)
+        assert result["branch"] == git(path, "branch", "--show-current") == "review/clean"
+        assert manager.check(result["task_id"], owner).codex_thread == manager.check(original_id, owner).codex_thread
+        assert notes.read_text() == "Local work from the first turn"
+        assert json.loads(await use_tool("resume", **continuation))["task_id"] == result["task_id"]
+
+        git(path, "add", "notes.txt")
+        git(path, "commit", "-qm", "Save local work")
+        new_head = git(path, "rev-parse", "HEAD")
+        assert await reclaim_project_worktrees(
+            {"beacon": project}, workspace, (await manager.read_statuses_for_session(owner)).values(),
+            lambda _: False, now=result["completed_at"] + 8 * 24 * 60 * 60,
+        ) == [original_id]
+        assert not path.exists()
+        continuation.pop("adopt_branch")
+        notices: asyncio.Queue[OutboundMessage] = asyncio.Queue()
+
+        async def deliver(msg):
+            notices.put_nowait(msg)
+            return "notice:" + msg.metadata["task_notice_id"]
+
+        manager.send_task_notice = deliver
+        with request_context(replace(request, message_id="resume-again", can_receive_background_results=True)):
+            async with asyncio.timeout(5):
+                reopened = json.loads(await SubagentTool(manager).execute(**continuation))
+                receipt = await notices.get()
+                finished = await notices.get()
+        assert reopened["reference"] in receipt.content and "Queued" in receipt.content
+        assert "Evaluated in the original thread" in finished.content
+        restored = manager.check(reopened["task_id"], owner)
+        assert restored.state == "done" and restored.branch == "review/clean"
+        assert git(path, "rev-parse", "HEAD") == new_head
+    finally:
+        await manager.close()
+        await sessions.state.aclose()
+
+
 class _DelegationProvider(LLMProvider):
     def __init__(self, answer=None):
         super().__init__(provider_name="offline-test")
@@ -176,15 +312,64 @@ class _DelegationProvider(LLMProvider):
         arguments = self.answer or {"action": "create", "backend": "codex", "task": "Compare candidates"}
         return LLMResponse(
             content=None,
-            tool_calls=[ToolCallRequest(id=f"codex_{arguments['action']}", name="subagent", arguments=arguments)],
+            tool_calls=[ToolCallRequest(id=f"codex_{uuid4().hex}", name="subagent", arguments=arguments)],
         )
 
 
 @pytest.mark.asyncio
+async def test_native_result_can_start_codex_task_for_original_sender(tmp_path, codex_project):
+    repo, executable = codex_project
+
+    class HandoffProvider(_DelegationProvider):
+        async def chat(self, messages, tools=None, **kwargs):
+            if messages[-1]["content"] == "Collect candidate date windows":
+                return LLMResponse(content="January and February are available.")
+            return await super().chat(messages, tools=tools, **kwargs)
+
+    provider = HandoffProvider()
+    loop = AgentLoop(
+        bus=MessageBus(), provider=provider, workspace=repo,
+        session_manager=SessionManager(repo, sessions_root=tmp_path / "sessions"),
+        tools_config=ToolsConfig(subagent=SubagentToolConfig(
+            codex=CodexTaskConfig(enabled=True, executable=str(executable)),
+        )),
+    )
+    owner = "cli:direct"
+    try:
+        session = await loop.sessions.state.get(owner)
+        await loop.sessions.state.prepare_input(session)
+        tool = SubagentTool(loop.subagents)
+        with request_context(RequestContext(
+            "cli", "direct", session_key=owner, sender_id="owner",
+            runtime=LLMRuntime.capture(provider, provider.get_default_model(), context_window_tokens=65_536),
+        )):
+            await tool.execute(action="create", task="Collect candidate date windows", reply_first=True)
+        event = await asyncio.wait_for(loop.bus.consume_inbound(), 5)
+        reply = await loop._process_message(event)
+        assert reply is not None and "Which date window?" in reply.content
+
+        task, = await loop.subagents.find_tasks(owner, "Compare candidates", sender_id="owner")
+        assert await loop.subagents.find_tasks(owner, task.reference, sender_id="other") == []
+        with request_context(RequestContext(
+            "cli", "direct", session_key=owner, sender_id="owner", can_receive_background_results=False,
+        )):
+            receipt = json.loads(await tool.execute(
+                action="send", task_id=task.reference, question_id=task.question_id, message="January",
+            ))
+        assert receipt["task"]["state"] == "done"
+        assert receipt["task"]["result"] == "Evaluated in the original thread"
+    finally:
+        await loop.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("codex_project", [False], indirect=True)
 async def test_codex_command_uses_shared_worker_from_direct_cli(tmp_path, codex_project):
     repo, executable = codex_project
     tools_config = ToolsConfig(
-        subagent=SubagentToolConfig(codex=CodexTaskConfig(enabled=True, executable=str(executable))),
+        subagent=SubagentToolConfig(codex=CodexTaskConfig.model_validate({
+            "enabled": True, "executable": str(executable), "networkAccess": False,
+        })),
     )
 
     async def run_once(message, *, answer=None):
@@ -195,7 +380,7 @@ async def test_codex_command_uses_shared_worker_from_direct_cli(tmp_path, codex_
         )
         try:
             reply = await loop.process_direct(message)
-            status, = loop.subagents.statuses_for_session("cli:direct").values()
+            status = max(loop.subagents.statuses_for_session("cli:direct").values(), key=lambda s: s.created_at)
             return reply, status
         finally:
             await loop.aclose()
@@ -209,6 +394,13 @@ async def test_codex_command_uses_shared_worker_from_direct_cli(tmp_path, codex_
     })
     assert completed.state == "done" and completed.codex_thread == pending.codex_thread
     assert reply is not None and "Evaluated in the original thread" in reply.content
+    reply, continued = await run_once("Continue the evaluation", answer={
+        "action": "create", "backend": "codex", "resume_task_id": completed.task_id,
+        "task": "Check January with the updated criteria",
+    })
+    assert reply is not None and continued.reference in reply.content
+    assert continued.state == "done" and continued.codex_thread == completed.codex_thread
+    assert continued.resume_task_id == completed.task_id and continued.task_id != completed.task_id
 
 
 @pytest.mark.asyncio

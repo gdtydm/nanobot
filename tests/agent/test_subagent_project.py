@@ -13,6 +13,7 @@ from nanobot.agent.memory import Consolidator
 from nanobot.agent.runner import AgentRunResult
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.subagent_project import (
+    ProjectWorktree,
     prepare_project_worktree,
     reclaim_project_worktrees,
 )
@@ -34,6 +35,7 @@ from nanobot.session.manager import SessionManager
 from nanobot.utils.llm_runtime import LLMRuntime
 
 OWNER = "feishu:ou_owner"
+OTHER_OWNER = "weixin:wx_owner"
 PROJECT = "tiktok_location_offline"
 
 
@@ -54,7 +56,7 @@ async def test_project_task_can_use_existing_checkout(tmp_path, wait):
         workspace=workspace, bus=MessageBus(), max_tool_result_chars=16_000,
         consolidator=MagicMock(spec=Consolidator), session_manager=sessions,
         tools_config=ToolsConfig(subagent=SubagentToolConfig(projects={PROJECT: SubagentProjectConfig(
-            repository=repo, worktree_script=None if wait else tmp_path / "unused-worktree-script", feishu_session=OWNER,
+            repository=repo, worktree_script=None if wait else tmp_path / "unused-worktree-script",
         )})),
     )
     provider = MagicMock(spec=LLMProvider)
@@ -83,12 +85,6 @@ async def test_project_task_can_use_existing_checkout(tmp_path, wait):
     token = bind_workspace_scope(default_workspace_scope(workspace, True))
     try:
         with request_context(RequestContext(
-            channel="feishu", chat_id="ou_other", session_key="feishu:ou_other",
-            runtime=runtime, metadata={"chat_type": "p2p"},
-        )):
-            denied = await tool.execute(action="create", task="Compare metrics", project=PROJECT, worktree=False)
-        assert is_tool_error_result(denied)
-        with request_context(RequestContext(
             channel="feishu", chat_id="ou_owner", session_key=OWNER,
             runtime=runtime, metadata={"chat_type": "p2p"},
         )):
@@ -115,7 +111,7 @@ async def test_project_task_can_use_existing_checkout(tmp_path, wait):
     shutil.which("git") is None or shutil.which("python3") is None,
     reason="requires Git and python3 for the worktree setup script",
 )
-async def test_feishu_project_tasks_use_distinct_worktrees_and_resume_their_own(tmp_path, restricted):
+async def test_project_tasks_from_two_channels_use_distinct_worktrees_and_resume_their_own(tmp_path, restricted):
     workspace = tmp_path / "agent"
     workspace.mkdir()
     repo = tmp_path / "repo"
@@ -152,16 +148,17 @@ async def test_feishu_project_tasks_use_distinct_worktrees_and_resume_their_own(
         workspace=workspace, bus=MessageBus(), max_tool_result_chars=16_000,
         consolidator=MagicMock(spec=Consolidator), session_manager=sessions,
         tools_config=ToolsConfig(subagent=SubagentToolConfig(projects={PROJECT: SubagentProjectConfig(
-            repository=repo, worktree_script=script, feishu_session=OWNER,
+            repository=repo, worktree_script=script,
         )})),
         max_concurrent_subagents=2,
     )
     provider = MagicMock(spec=LLMProvider)
     provider.generation = GenerationSettings()
     runtime = LLMRuntime.capture(provider, "test", context_window_tokens=128_000)
-    parent = await sessions.state.get(OWNER)
-    parent.add_message("user", "Start project tasks")
-    await sessions.state.finish_turn(parent)
+    for owner in (OWNER, OTHER_OWNER):
+        parent = await sessions.state.get(owner)
+        parent.add_message("user", "Start project tasks")
+        await sessions.state.finish_turn(parent)
     tool = SubagentTool(manager)
     ready = asyncio.Queue()
     release = asyncio.Event()
@@ -205,8 +202,9 @@ async def test_feishu_project_tasks_use_distinct_worktrees_and_resume_their_own(
     async def start(label, owner=OWNER, **kwargs):
         token = bind_workspace_scope(default_workspace_scope(workspace, restricted))
         try:
+            channel, chat_id = owner.split(":", 1)
             with request_context(RequestContext(
-                channel="feishu", chat_id=owner.split(":")[1], session_key=owner,
+                channel=channel, chat_id=chat_id, session_key=owner,
                 runtime=runtime, metadata={"chat_type": "p2p"},
             )):
                 return await tool.execute(action="create", task="edit a file", label=label, project=PROJECT, **kwargs)
@@ -214,35 +212,34 @@ async def test_feishu_project_tasks_use_distinct_worktrees_and_resume_their_own(
             reset_workspace_scope(token)
 
     try:
-        assert "unavailable" in await start("FOREIGN", owner="feishu:ou_other")
         first = await start("LOC-1", worktree=True)
-        second = await start("LOC-2")
+        second = await start("LOC-2", owner=OTHER_OWNER)
         first_id, = re.findall(r"id: ([a-f0-9-]+)", first)
         second_id, = re.findall(r"id: ([a-f0-9-]+)", second)
         paths = {await asyncio.wait_for(ready.get(), 15), await asyncio.wait_for(ready.get(), 15)}
         assert len(paths) == 2
-        for task_id in (first_id, second_id):
-            _, child = manager.read_session(task_id, OWNER)
+        for task_id, owner in ((first_id, OWNER), (second_id, OTHER_OWNER)):
+            _, child = manager.read_session(task_id, owner)
             entries = await sessions.state.project_history(child.key, lambda history: list(history.model_request_inputs()))
             (_, request), = entries
             assert request.content["sources"] == [
-                str(Path(manager.check(task_id, OWNER).worktree) / "AGENTS.override.md"),
+                str(Path(manager.check(task_id, owner).worktree) / "AGENTS.override.md"),
                 str(Path(__file__).resolve().parents[2] / "nanobot/templates/agent/subagent_system.md"),
             ]
         assert all((path / "worker.txt").read_text() == "edited" for path in paths)
         assert not (repo / "worker.txt").exists()
-        assert "finished project task" in await start("LOC-1", resume_task_id=first_id)
+        assert "requires a finished task" in await start("LOC-1", resume_task_id=first_id)
         release.set()
-        completed_ids = set()
+        completed = {}
         for _ in range(2):
             event = await asyncio.wait_for(manager.bus.consume_inbound(), 10)
-            assert event.session_key == OWNER
             assert "Verified project changes" in event.content
             assert "Worktree:" in event.content
-            completed_ids.add(event.metadata["subagent_task_id"])
-        assert completed_ids == {first_id, second_id}
+            completed[event.metadata["subagent_task_id"]] = event.session_key
+        assert completed == {first_id: OWNER, second_id: OTHER_OWNER}
         saved = manager.check(first_id, OWNER)
         assert saved.state == "done" and saved.worktree
+        assert "task unavailable" in await start("LOC-1", owner=OTHER_OWNER, resume_task_id=first_id)
 
         resumed = await start("LOC-1", resume_task_id=first_id)
         resumed_id, = re.findall(r"id: ([a-f0-9-]+)", resumed)
@@ -282,7 +279,7 @@ def retention_project(tmp_path):
         "subprocess.run(['git', '-C', repo, 'worktree', 'add', '-b', branch, path, ref], check=True)\n"
         "(pathlib.Path(path) / 'AGENTS.override.md').write_text('trusted setup')\n"
     )
-    return SubagentProjectConfig(repository=repo, worktree_script=script, feishu_session=OWNER), tmp_path / "agent"
+    return SubagentProjectConfig(repository=repo, worktree_script=script), tmp_path / "agent"
 
 
 def _completed(worktree_id, path, branch, timestamp):
@@ -301,7 +298,7 @@ async def test_reclaim_and_resume_preserve_branch_and_local_artifacts(retention_
     statuses = {}
     for name in ("clean", "dirty", "artifact", "active", "changed-setup", "assume-unchanged"):
         worktree_id = str(uuid4())
-        tree = await prepare_project_worktree(config, workspace, worktree_id, resume=False)
+        tree = await prepare_project_worktree(config, workspace, worktree_id)
         statuses[name] = _completed(worktree_id, tree.path, tree.branch, now - 8 * 24 * 60 * 60)
 
     clean = statuses["clean"]
@@ -333,7 +330,9 @@ async def test_reclaim_and_resume_preserve_branch_and_local_artifacts(retention_
     assert (hidden_change / "tracked.txt").read_text() == "uncommitted change hidden from git status"
     assert Path(active.worktree).is_dir()
 
-    resumed = await prepare_project_worktree(config, workspace, clean.worktree_id, resume=True)
+    resumed = await prepare_project_worktree(
+        config, workspace, clean.worktree_id, resume=ProjectWorktree(clean_path, clean.branch),
+    )
     assert resumed.path == clean_path
     assert resumed.branch == clean.branch
     assert _git(clean_path, "rev-parse", "HEAD") == commit
@@ -360,9 +359,11 @@ async def test_reclaim_keeps_ten_recent_clean_checkouts_and_expires_old_ones(ret
         consolidator=MagicMock(spec=Consolidator), session_manager=sessions,
         tools_config=ToolsConfig(subagent=SubagentToolConfig(projects={PROJECT: config})),
     )
-    parent = await sessions.state.get(OWNER)
-    parent.add_message("user", "Run a project task")
-    await sessions.state.finish_turn(parent)
+    statuses[1].owner = OTHER_OWNER
+    for owner in (OWNER, OTHER_OWNER):
+        parent = await sessions.state.get(owner)
+        parent.add_message("user", "Run a project task")
+        await sessions.state.finish_turn(parent)
     for status in statuses:
         await manager.sessions.create(status)
 

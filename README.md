@@ -478,6 +478,15 @@ Browse the [repo docs](./docs/README.md) for current source documentation, or vi
 
 ## Releases
 
+### Local source build v0.4.2
+
+- Native subagents send verified milestones, such as a live version or accepted backfill ID, to the main agent during an active turn. The main agent can update its reply while delegated work continues. The latest milestone is also available through the task status.
+- Project subagents can start a worktree from an explicit local Git revision and resume an existing checkout. A branch mismatch reports the expected and actual branches and commit. An explicit branch adoption lets the agent resume on the branch already checked out.
+- Codex can continue a finished task from its saved thread and checkout. Follow-up tasks retain the original requester for ownership checks, and gateway recovery and worktree cleanup use saved task state across conversations.
+- Persistent conversations with subagent access can select gateway-configured projects. The old per-project `sessions` and `feishuSession` settings no longer restrict project selection. When Codex is enabled, the agent can select it as a backend. Codex uses auto-review for eligible approval requests and enables sandboxed network access by default. Set `tools.subagent.codex.networkAccess` to `false` to disable sandboxed networking.
+
+See [Subagents and Codex tasks](./docs/concepts.md#subagents) for setup and continuation details.
+
 **Latest release: [v0.4.0](https://github.com/HKUDS/nanobot/releases/tag/v0.4.0)**
 
 v0.4.0 makes everyday work easier to continue, with durable conversation history, a more capable browser workbench, and diagrams in the terminal.

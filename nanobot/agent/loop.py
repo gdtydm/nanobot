@@ -27,7 +27,12 @@ from nanobot.agent.hook import AgentHook, AgentTurnHookFactory
 from nanobot.agent.memory import Consolidator
 from nanobot.agent.model_runtime import ModelRuntimeResolver
 from nanobot.agent.runner import AgentRunner, AgentRunResult, AgentRunSpec
-from nanobot.agent.subagent import SUBAGENT_REPLY_FIRST_META, SubagentManager
+from nanobot.agent.subagent import (
+    SUBAGENT_ORIGIN_SENDER_META,
+    SUBAGENT_PROGRESS_EVENT,
+    SUBAGENT_REPLY_FIRST_META,
+    SubagentManager,
+)
 from nanobot.agent.tools.context import RequestContext, bind_request_context, reset_request_context
 from nanobot.agent.tools.exec_session import ExecSessionManager
 from nanobot.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
@@ -773,6 +778,11 @@ class AgentLoop:
             message_metadata=_prompt_scope_metadata(ctx.msg.metadata),
             session_metadata=_prompt_scope_metadata(ctx.session.metadata),
         )
+        sender_id = ctx.msg.sender_id
+        if ctx.kind is TurnKind.SYSTEM and ctx.msg.channel == "system" and sender_id == "subagent":
+            origin_sender: object = ctx.msg.metadata.get(SUBAGENT_ORIGIN_SENDER_META)
+            if isinstance(origin_sender, str) and origin_sender:
+                sender_id = origin_sender
         return RequestContext(
             channel=ctx.delivery.route.channel,
             chat_id=ctx.delivery.route.chat_id,
@@ -783,7 +793,7 @@ class AgentLoop:
             runtime=ctx.runtime,
             metadata=dict(ctx.msg.metadata or {}),
             attributes=dict(ctx.attributes),
-            sender_id=ctx.msg.sender_id,
+            sender_id=sender_id,
             turn_id=origin["turn_id"],
             workspace=scope.project_path,
             workspace_scope=scope,
@@ -1525,6 +1535,11 @@ class AgentLoop:
         session_key = msg.session_key
         if not self.subagents.accepts_result(msg, session_key):
             return
+        if msg.sender_id == "subagent" and msg.metadata.get("injected_event") == SUBAGENT_PROGRESS_EVENT:
+            # Intermediate progress can update an active turn without starting a new one.
+            if (pending := self._pending_queues.get(session_key)) is not None:
+                pending.put_nowait(msg)
+            return
 
         for coordinator in self._automation_turn_coordinators:
             if coordinator.defer_if_active(
@@ -1609,6 +1624,9 @@ class AgentLoop:
         msg: InboundMessage,
         pending: asyncio.Queue[InboundMessage],
     ) -> None:
+        # The previous turn may finish before it can consume a queued milestone.
+        if msg.sender_id == "subagent" and msg.metadata.get("injected_event") == SUBAGENT_PROGRESS_EVENT:
+            return
         session_key = msg.session_key
         # The request context is reset before errors reach this boundary, and
         # discard may evict the session while a turn is still unwinding.

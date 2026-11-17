@@ -166,7 +166,10 @@ class CodexTurn:
 
     async def open_thread(self, thread_id: str | None) -> str:
         params: dict[str, Any] = {
-            "cwd": str(self.cwd), "approvalPolicy": "never", "sandbox": "workspace-write",
+            "cwd": str(self.cwd),
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "auto_review",
+            "sandbox": "workspace-write",
         }
         if self.model:
             params["model"] = self.model
@@ -190,7 +193,8 @@ class CodexTurn:
             "threadId": self.thread_id,
             "input": [{"type": "text", "text": text}],
             "cwd": str(self.cwd),
-            "approvalPolicy": "never",
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "auto_review",
             "sandboxPolicy": {
                 "type": "workspaceWrite", "writableRoots": [str(self.cwd)],
                 "networkAccess": self.config.network_access,

@@ -22,7 +22,11 @@ from nanobot.agent.project_instructions import load_project_instructions
 from nanobot.agent.runner import AgentRunner, AgentRunSpec
 from nanobot.agent.session_activity import SessionActivity
 from nanobot.agent.skills import SkillsLoader, project_skill_root
-from nanobot.agent.subagent_project import prepare_project_worktree, reclaim_project_worktrees
+from nanobot.agent.subagent_project import (
+    ProjectWorktree,
+    prepare_project_worktree,
+    reclaim_project_worktrees,
+)
 from nanobot.agent.subagent_sessions import SubagentSessions
 from nanobot.agent.subagent_status import SubagentBackend, SubagentSessionError, SubagentStatus
 from nanobot.agent.subagent_status import SubagentState as SubagentState
@@ -38,6 +42,7 @@ from nanobot.agent.tools.exec_session import ExecSessionManager
 from nanobot.agent.tools.file_state import FileStates
 from nanobot.agent.tools.loader import ToolLoader
 from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.agent.tools.schema import StringSchema, tool_parameters_schema
 from nanobot.agent.tools.subagent_config import SubagentProjectConfig
 from nanobot.agent.turn_hooks import AgentTurnHookSpec, build_agent_turn_hook
 from nanobot.bus.events import InboundMessage, OutboundMessage
@@ -58,6 +63,7 @@ from nanobot.security.workspace_access import (
     reset_workspace_scope,
     workspace_sandbox_status,
 )
+from nanobot.session.history_visibility import HIDDEN_HISTORY_META
 from nanobot.session.manager import Session, SessionManager, SessionPolicy
 from nanobot.utils.cancellation import shield_and_drain
 from nanobot.utils.llm_runtime import LLMRuntime
@@ -67,13 +73,16 @@ if TYPE_CHECKING:
     from nanobot.agent.memory import Consolidator
 
 
+SUBAGENT_PROGRESS_EVENT = "subagent_progress"
 SUBAGENT_REPLY_FIRST_META = "_subagent_reply_first"
+SUBAGENT_ORIGIN_SENDER_META = "_subagent_origin_sender_id"
 
 
 class _SubagentOrigin(TypedDict):
     channel: str
     chat_id: str
     session_key: str | None
+    sender_id: NotRequired[str | None]
     llm_usage_source: NotRequired[LLMUsageSource]
 
 
@@ -111,11 +120,11 @@ class _SubagentTask:
     origin_message_id: str | None = None
     workspace_scope: WorkspaceScope | None = None
     project_config: SubagentProjectConfig | None = None
-    resume_project: bool = False
     announce: bool = True
     begun: bool = False
     suppress_notice: bool = False
     inbox: list[tuple[str, str]] = field(default_factory=list)
+    reported_milestones: set[str] = field(default_factory=set)
     outcome: _SubagentOutcome | None = None
     exec_manager: ExecSessionManager = field(default_factory=ExecSessionManager)
     cleanup_task: asyncio.Task[int] | None = None
@@ -230,6 +239,28 @@ class _SubagentHook(AgentHook):
             self._status.error = str(context.error)
         if self._on_status is not None:
             await self._on_status(self._status)
+
+
+class _ReportProgressTool(Tool):
+    """Report a verified milestone to the parent of this execution."""
+
+    _plugin_discoverable = False
+    name = "report_progress"
+    description = "Report a meaningful, verified milestone while continuing the current task."
+    parameters = tool_parameters_schema(
+        required=["milestone", "summary"],
+        milestone=StringSchema("Stable key for this milestone, used to deduplicate retries.", min_length=1, max_length=120),
+        summary=StringSchema("Brief factual update with evidence IDs and any remaining work.", min_length=1, max_length=800),
+    )
+
+    def __init__(self, report: Callable[[str, str], Awaitable[str]]) -> None:
+        self._report = report
+
+    async def execute(self, milestone: str, summary: str, **kwargs: Any) -> str:
+        milestone, summary = milestone.strip(), summary.strip()
+        if not milestone or not summary:
+            return ToolResult.error("A milestone and summary are required.")
+        return await self._report(milestone, summary)
 
 
 class SubagentManager:
@@ -357,12 +388,11 @@ class SubagentManager:
     async def _maintain_project_worktrees(self) -> None:
         assert self.sessions is not None
         projects = self.tools_config.subagent.projects
-        owners = {owner for config in projects.values() for owner in config.sessions}
         while True:
             self._worktree_sweep_needed.clear()
             try:
                 async with self._worktree_lock:
-                    statuses = [status for owner in owners for status in self.sessions.load(owner).values()]
+                    statuses = await asyncio.to_thread(self.sessions.load_all)
                     await reclaim_project_worktrees(
                         projects, self.workspace, statuses, self._worktree_in_use, now=time.time(),
                     )
@@ -661,6 +691,7 @@ class SubagentManager:
         session_policy: SessionPolicy | None,
         project: str | None = None, resume_task_id: str | None = None,
         reply_first: bool = False, worktree: bool | None = None,
+        base_ref: str | None = None, adopt_branch: str | None = None,
         backend: SubagentBackend = "native", sender_id: str | None = None,
         origin_route: dict[str, Any] | None = None,
         origin_generation: str | None = None,
@@ -670,42 +701,73 @@ class SubagentManager:
             runtime = self._compat_spawn_runtime()
         if temperature is not None and runtime is not None:
             runtime = runtime.with_generation_overrides(temperature=temperature)
+        owner = session_key or f"{origin_channel}:{origin_chat_id}"
+        task_id = str(uuid.uuid4())
+        previous = None
+        bound_worktree = None
+        if resume_task_id is not None:
+            previous = self._owned_status(resume_task_id, owner)
+            self._check_codex_sender(previous, sender_id)
+            if previous.finished_at is None:
+                raise SubagentControlError("resume_task_id requires a finished task")
+            if backend == "codex":
+                if previous.backend != "codex":
+                    raise SubagentControlError("Codex can resume only a Codex task")
+                if project is None:
+                    project = previous.project
+            elif previous.worktree_id is None or project is None:
+                raise SubagentControlError("native resume requires a configured project and a prepared worktree")
+            if project != previous.project:
+                raise SubagentControlError("resume must use the previous task's project")
+            if worktree is not None and worktree != (previous.worktree_id is not None):
+                raise SubagentControlError("resume must use the previous task's checkout")
+            if previous.worktree_id is not None and (previous.worktree is None or previous.branch is None):
+                raise SubagentControlError("the previous task did not prepare its project worktree")
+            if previous.worktree_id is not None:
+                bound_worktree = previous
+            history = await self.read_statuses_for_session(owner)
+            # An older task ID can point to a checkout adopted by a later execution.
+            for status in history.values():
+                same_worktree = previous.worktree_id is not None and status.worktree_id == previous.worktree_id
+                same_thread = (
+                    backend == "codex" and previous.codex_thread is not None
+                    and status.codex_thread == previous.codex_thread
+                )
+                if (same_worktree or same_thread) and status.finished_at is None:
+                    raise SubagentControlError("the worktree or Codex thread already has an unfinished task")
+                if (same_worktree and status.worktree and status.branch
+                        and (bound_worktree is None or status.created_at > bound_worktree.created_at)):
+                    bound_worktree = status
+        self.bus.admission.check()
         # A failed cleanup owns admission even after its status has been evicted.
         if self._closed or len(self._tasks) + self._admitting >= self.MAX_ACTIVE:
             raise SubagentControlError("subagent manager is closed or at task capacity")
-        owner = session_key or f"{origin_channel}:{origin_chat_id}"
-        task_id = str(uuid.uuid4())
         project_config = None
-        worktree_id = None
-        if project is None and (worktree or resume_task_id is not None):
+        worktree_id = previous.worktree_id if previous else None
+        codex_thread = previous.codex_thread if previous and backend == "codex" else None
+        if base_ref is not None and previous is not None:
+            raise SubagentControlError("base_ref applies only to new worktrees")
+        if adopt_branch is not None and (not adopt_branch.strip() or worktree_id is None):
+            raise SubagentControlError("adopt_branch requires a branch name and a resumed worktree")
+        if project is None and (worktree or base_ref is not None):
             raise SubagentControlError("a worktree requires a configured project")
         if project is not None:
             project_config = self.tools_config.subagent.projects.get(project)
-            if (
-                project_config is None or not project_config.allows(owner)
-                or self.sessions is None
-                or (session_policy is not None and not session_policy.persist)
-            ):
-                raise SubagentControlError("project is unavailable in this conversation")
-            use_worktree = worktree if worktree is not None else (
-                resume_task_id is not None or project_config.worktree_script is not None
-            )
-            if resume_task_id is not None and not use_worktree:
-                raise SubagentControlError("resume_task_id requires a worktree")
+            if project_config is None:
+                raise SubagentControlError(f"project {project!r} is not configured")
+            if self.sessions is None or (session_policy is not None and not session_policy.persist):
+                raise SubagentControlError("project tasks require a persistent conversation")
+            use_worktree = worktree if worktree is not None else project_config.worktree_script is not None
+            if previous is not None:
+                use_worktree = worktree_id is not None
+            if base_ref is not None and (not base_ref.strip() or not use_worktree):
+                raise SubagentControlError("base_ref requires a Git revision and a new worktree")
             if use_worktree:
                 if not announce and backend == "native":
                     raise SubagentControlError("worktree tasks require background execution with wait=false")
-                if resume_task_id is None and project_config.worktree_script is None:
+                if previous is None and project_config.worktree_script is None:
                     raise SubagentControlError("no worktree setup script is configured for this project")
-                worktree_id = task_id
-            if resume_task_id is not None:
-                previous = self._owned_status(resume_task_id, owner)
-                if (
-                    previous.project != project or previous.worktree_id is None
-                    or previous.worktree is None or previous.finished_at is None
-                ):
-                    raise SubagentControlError("a finished project task with a prepared worktree is required")
-                worktree_id = previous.worktree_id
+                worktree_id = worktree_id or task_id
             if worktree_id is not None:
                 if self._worktree_in_use(worktree_id):
                     raise SubagentControlError("the project worktree already has a task in progress")
@@ -721,6 +783,11 @@ class SubagentManager:
             origin_turn_id=origin_turn_id,
             project=project,
             worktree_id=worktree_id,
+            worktree=bound_worktree.worktree if bound_worktree else None,
+            branch=bound_worktree.branch if bound_worktree else None,
+            resume_task_id=resume_task_id,
+            base_ref=base_ref,
+            adopt_branch=adopt_branch,
             reply_first=reply_first,
             backend=backend,
             origin_sender_id=sender_id if backend == "codex" else None,
@@ -728,11 +795,15 @@ class SubagentManager:
             origin_channel=origin_channel if backend == "codex" else None,
             origin_chat_id=origin_chat_id if backend == "codex" else None,
             origin_route=origin_route or {},
-            cwd=str((workspace_scope.project_path if workspace_scope else self.workspace).resolve())
-            if backend == "codex" else None,
-            model=self.tools_config.subagent.codex.model if backend == "codex" else None,
-            effort=self.tools_config.subagent.codex.effort if backend == "codex" else None,
+            codex_thread=codex_thread,
         )
+        if backend == "codex":
+            config = self.tools_config.subagent.codex
+            if previous is not None and codex_thread is not None:
+                status.cwd, status.model, status.effort = previous.cwd, previous.model, previous.effort
+            else:
+                status.cwd = str((workspace_scope.project_path if workspace_scope else self.workspace).resolve())
+                status.model, status.effort = config.model, config.effort
         self._admitting += 1
         try:
             if self.sessions is not None:
@@ -763,12 +834,12 @@ class SubagentManager:
             runtime=runtime,
             origin={
                 "channel": origin_channel, "chat_id": origin_chat_id,
-                "session_key": owner, "llm_usage_source": current_llm_usage_source(),
+                "session_key": owner, "sender_id": sender_id,
+                "llm_usage_source": current_llm_usage_source(),
             },
             origin_message_id=origin_message_id,
             workspace_scope=workspace_scope,
             project_config=project_config,
-            resume_project=resume_task_id is not None,
             announce=announce,
         )
         self._tasks[task_id] = record
@@ -790,25 +861,35 @@ class SubagentManager:
     async def spawn_codex(
         self, task: str, *, label: str | None, project: str | None, worktree: bool | None,
         request: RequestContext,
+        base_ref: str | None = None, resume_task_id: str | None = None, adopt_branch: str | None = None,
     ) -> tuple[str, bool]:
         if not self.tools_config.subagent.codex.enabled:
             raise SubagentControlError("Codex tasks are disabled (tools.subagent.codex.enabled)")
         owner = request.session_key
         if not owner or not request.persist_session or self.sessions is None:
             raise SubagentControlError("Codex tasks require a persistent conversation")
+        if not request.sender_id:
+            raise SubagentControlError("Codex tasks require an active sender identity")
         input_id = str(request.message_id or request.turn_id or "") or None
         async with self._codex_admission:
             if input_id:
-                for status in (await self.read_statuses_for_session(owner)).values():
-                    if (status.backend == "codex" and status.origin_message_id == input_id
-                            and status.origin_sender_id == request.sender_id):
-                        return json.dumps(status.as_dict(), ensure_ascii=False), "receipt" in status.notice_ids
+                matches = [
+                    status for status in (await self.read_statuses_for_session(owner)).values()
+                    if status.backend == "codex" and status.origin_message_id == input_id
+                    and status.origin_sender_id == request.sender_id and status.resume_task_id == resume_task_id
+                    and (status.finished_at is None or status.state == "done"
+                         or (status.base_ref == base_ref and status.adopt_branch == adopt_branch))
+                ]
+                if matches:
+                    status = max(matches, key=lambda candidate: candidate.created_at)
+                    return json.dumps(status.as_dict(), ensure_ascii=False), "receipt" in status.notice_ids
             record = await self._create_task(
                 task, label, request.channel, request.chat_id, owner, input_id,
                 None, request.workspace_scope, None,
                 announce=request.can_receive_background_results, origin_turn_id=request.turn_id,
                 session_policy=SessionPolicy(persist=True, log_content=request.log_content),
                 project=project, worktree=worktree, reply_first=True, backend="codex",
+                base_ref=base_ref, resume_task_id=resume_task_id, adopt_branch=adopt_branch,
                 sender_id=request.sender_id,
                 origin_route=notification_metadata(request.channel, request.metadata),
                 origin_generation=request.session_generation,
@@ -1000,6 +1081,9 @@ class SubagentManager:
         reply_first: bool = False,
         worktree: bool | None = None,
         origin_route: dict[str, Any] | None = None,
+        sender_id: str | None = None,
+        base_ref: str | None = None,
+        adopt_branch: str | None = None,
     ) -> str:
         """Start background work and route its terminal result to the parent."""
         try:
@@ -1007,7 +1091,8 @@ class SubagentManager:
                 task, label, origin_channel, origin_chat_id, session_key,
                 origin_message_id, temperature, workspace_scope, runtime, announce=True, origin_turn_id=origin_turn_id,
                 session_policy=session_policy, project=project, resume_task_id=resume_task_id,
-                reply_first=reply_first, worktree=worktree, origin_route=origin_route,
+                reply_first=reply_first, worktree=worktree, origin_route=origin_route, sender_id=sender_id,
+                base_ref=base_ref, adopt_branch=adopt_branch,
             )
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
@@ -1041,6 +1126,8 @@ class SubagentManager:
         project: str | None = None,
         worktree: bool | None = None,
         resume_task_id: str | None = None,
+        base_ref: str | None = None,
+        adopt_branch: str | None = None,
     ) -> str:
         """Wait for the same task lifecycle without a background notice."""
         try:
@@ -1048,6 +1135,7 @@ class SubagentManager:
                 task, label, origin_channel, origin_chat_id, session_key,
                 origin_message_id, temperature, workspace_scope, runtime, announce=False, origin_turn_id=origin_turn_id,
                 session_policy=session_policy, project=project, worktree=worktree, resume_task_id=resume_task_id,
+                base_ref=base_ref, adopt_branch=adopt_branch,
             )
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
@@ -1118,7 +1206,7 @@ class SubagentManager:
         record.begun = True
         try:
             record.raise_if_stopping()
-            if status.backend == "codex" and status.codex_thread is None and "receipt" not in status.notice_ids:
+            if status.backend == "codex" and status.codex_turn is None and "receipt" not in status.notice_ids:
                 try:
                     await self._codex_notice(record, "receipt", "Accepted by Codex · Queued")
                 finally:
@@ -1131,20 +1219,19 @@ class SubagentManager:
                 record.raise_if_stopping()
                 if status.backend == "codex" and status.project:
                     record.project_config = self.tools_config.subagent.projects.get(status.project)
-                    if record.project_config is None or not record.project_config.allows(status.owner):
-                        raise SubagentControlError("project is unavailable in this conversation")
+                    if record.project_config is None:
+                        raise SubagentControlError(f"project {status.project!r} is not configured")
                 if record.project_config is not None:
-                    if status.worktree is not None and status.backend == "codex":
-                        worktree = await prepare_project_worktree(
-                            record.project_config, self.workspace, status.worktree_id or status.task_id, resume=True,
-                        )
-                        project_root = worktree.path
-                    elif status.worktree_id is not None:
-                        # A resumed checkout shares its path with the retention scan until preparation ends.
-                        async with self._worktree_lock if record.resume_project else nullcontext():
+                    if status.worktree_id is not None:
+                        saved = None
+                        if status.worktree is not None and status.branch is not None:
+                            saved = ProjectWorktree(Path(status.worktree), status.branch)
+                        # Reopening and adopting share the checkout with the retention scan.
+                        async with self._worktree_lock if saved is not None else nullcontext():
                             worktree = await prepare_project_worktree(
                                 record.project_config, self.workspace, status.worktree_id,
-                                resume=record.resume_project,
+                                resume=saved, base_ref=status.base_ref,
+                                adopt_branch=status.adopt_branch if status.adopt_branch != status.branch else None,
                             )
                         record.raise_if_stopping()
                         project_root = worktree.path
@@ -1222,8 +1309,10 @@ class SubagentManager:
                     record.raise_if_stopping()
                     inputs = list(status.pending_inputs)
                     task_text = status.task_description
-                    if resuming:
+                    if status.question is not None and resuming:
                         task_text = f"Continue the same task. The user's answer to your question {status.question!r} follows."
+                    elif resuming:
+                        task_text = f"Continue the same task. Apply the following instructions.\n\n{task_text}"
                     if inputs:
                         task_text += "\n\nUser follow-up:\n" + "\n".join(message for _, message in inputs)
                     task_text += (
@@ -1288,6 +1377,31 @@ class SubagentManager:
             status.progress, status.progress_at = progress, time.time()
             await self._save_status(status)
 
+    async def _report_progress(self, record: _SubagentTask, milestone: str, summary: str) -> str:
+        record.raise_if_stopping()
+        if milestone in record.reported_milestones:
+            return "Milestone already recorded."
+        record.reported_milestones.add(milestone)
+        status = record.status
+        status.progress, status.progress_at = summary, time.time()
+        await self._save_status(status)
+        record.raise_if_stopping()
+        if record.announce:
+            await self.bus.publish_inbound(InboundMessage(
+                channel="system",
+                sender_id="subagent",
+                chat_id=f"{record.origin['channel']}:{record.origin['chat_id']}",
+                session_key_override=status.owner,
+                require_existing_session=True,
+                content=f"[Subagent {status.label!r} progress. The task is still running.]\n{summary}",
+                metadata={
+                    "injected_event": SUBAGENT_PROGRESS_EVENT,
+                    "subagent_task_id": status.task_id,
+                    HIDDEN_HISTORY_META: {"kind": SUBAGENT_PROGRESS_EVENT},
+                },
+            ))
+        return "Milestone recorded."
+
     async def _run_admitted_subagent(self, record: _SubagentTask) -> _SubagentOutcome:
         status, origin, runtime = record.status, record.origin, record.runtime
         assert runtime is not None
@@ -1323,6 +1437,7 @@ class SubagentManager:
         tools = self._build_tools(
             tools_config=cfg, exec_manager=record.exec_manager, repository_skill_roots=repository_skill_roots,
         )
+        tools.register(_ReportProgressTool(partial(self._report_progress, record)))
         observe_model_request = None
         trace_enabled = self.sessions is not None and record.session.policy.persist and record.session.policy.log_content
         with capture_sources() if trace_enabled else nullcontext() as sources:
@@ -1503,6 +1618,8 @@ class SubagentManager:
             announce_content += "\nMessage receipts: " + json.dumps(receipts)
         if origin_message_id:
             metadata["origin_message_id"] = origin_message_id
+        if sender_id := origin.get("sender_id"):
+            metadata[SUBAGENT_ORIGIN_SENDER_META] = sender_id
         msg = InboundMessage(
             channel="system",
             sender_id="subagent",

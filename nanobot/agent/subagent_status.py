@@ -46,6 +46,9 @@ class SubagentStatus:
     worktree_id: str | None = None
     worktree: str | None = None
     branch: str | None = None
+    resume_task_id: str | None = None
+    base_ref: str | None = None
+    adopt_branch: str | None = None
     reply_first: bool = False
     backend: SubagentBackend = "native"
     progress: str | None = None
@@ -95,6 +98,8 @@ class SubagentStatus:
             "project": self.project,
             "worktree": self.worktree,
             "branch": self.branch,
+            "resume_task_id": self.resume_task_id,
+            "base_ref": self.base_ref,
             "backend": self.backend,
             "reference": self.reference,
             "progress": self.progress,

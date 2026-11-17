@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
-import time
-import uuid
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -23,14 +20,6 @@ from nanobot.channels.notification_routes import notification_metadata
 from nanobot.security.workspace_access import current_workspace_scope
 from nanobot.session.manager import SessionPolicy
 
-_CODEX_DELEGATION = re.compile(
-    r"^(?:/codex(?:@[\w]+)?\s+|"
-    r"(?:请\s*)?(?:让|用|交给|调用|委托|派)\s*codex(?![a-z0-9_])|"
-    r"(?:(?:please\s+)?(?:have|use|ask|let|run)\s+codex\b))",
-    re.IGNORECASE,
-)
-_CODEX_DRAFT_KEY = "codex_delegation"
-
 if TYPE_CHECKING:
     from nanobot.agent.subagent import SubagentManager
     from nanobot.agent.tools.context import ToolContext
@@ -38,15 +27,14 @@ if TYPE_CHECKING:
 
 @tool_parameters(tool_parameters_schema(
     action=StringSchema(
-        "create starts a task; prepare records an explicit Codex request before asking a clarifying "
-        "question; send queues a message or answers a waiting task; cancel stops one task; check reads status.",
-        enum=("create", "prepare", "send", "cancel", "check"),
+        "Use create to start a task, send to queue a message or answer a waiting task, "
+        "cancel to stop a task, and check to read its status.",
+        enum=("create", "send", "cancel", "check"),
     ),
     task=StringSchema("Required for create: the task for the subagent to complete.", min_length=1),
     label=StringSchema("Display label for create."),
-    backend=StringSchema("Use codex only when the user explicitly delegates to Codex.", enum=("native", "codex")),
+    backend=StringSchema("Execution backend for create. Codex requires gateway configuration.", enum=("native", "codex")),
     query=StringSchema("For check, send, or cancel: task reference, title, or project within this conversation."),
-    delegation_id=StringSchema("For Codex create after clarification: ID from prepare in the same conversation."),
     question_id=StringSchema("For send: the pending question ID returned by check, when answering a specific question."),
     project=StringSchema("For create: a gateway-configured project whose rules, skills, and working directory apply."),
     worktree=BooleanSchema(
@@ -56,7 +44,16 @@ if TYPE_CHECKING:
         ),
     ),
     resume_task_id=StringSchema(
-        "For a project create: full ID of a finished task in this conversation whose worktree should be reused."
+        "On create, pass the full ID of a finished task in this conversation. Native resume reuses its project "
+        "worktree. With backend=codex, continue the saved Codex thread and checkout when available."
+    ),
+    base_ref=StringSchema(
+        "Git revision for a new project worktree, such as origin/main or a commit ID. Defaults to HEAD.",
+        min_length=1,
+    ),
+    adopt_branch=StringSchema(
+        "With resume_task_id, use the given local branch already checked out in the same project worktree.",
+        min_length=1,
     ),
     temperature=NumberSchema(
         description="Sampling temperature for create; inherits the parent's runtime if omitted.",
@@ -110,9 +107,11 @@ class SubagentTool(Tool):
     def description(self) -> str:
         return (
             "Manage the current session's private subagent tasks. "
-            "For an explicit Codex delegation, resolve the configured project and criteria, read applicable "
-            "project instructions, and create with backend=codex. Use prepare before asking a clarifying question "
-            "about an explicit delegation, then pass its delegation_id on create. "
+            "When using Codex, resolve the configured project and task criteria, read applicable "
+            "project instructions, and create with backend=codex. "
+            "To continue a finished Codex task, use create with backend=codex and resume_task_id. "
+            "Put the remaining work and any undelivered instructions in task. If the worktree changed branches, "
+            "use adopt_branch with the intended checked-out branch when continuing. "
             "Use check for natural-language progress queries and configured project discovery. "
             "If a query finds multiple matches, ask which one. "
             "Use send to supplement or answer and cancel to stop the identified task. "
@@ -133,18 +132,28 @@ class SubagentTool(Tool):
         temperature: float | None = None, wait: bool = False,
         project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False,
         worktree: bool | None = None, backend: str = "native", query: str | None = None,
-        delegation_id: str | None = None, question_id: str | None = None, **kwargs: Any,
+        question_id: str | None = None, base_ref: str | None = None, adopt_branch: str | None = None,
+        **kwargs: Any,
     ) -> str:
         owner = current_request_session_key()
         request = current_request_context()
         try:
-            if action == "prepare" or (action == "create" and backend == "codex"):
-                return await self._delegate_codex(action, task, label, project, worktree, delegation_id)
             if action == "create":
                 if not task or not task.strip():
                     return ToolResult.error("Error: create requires a non-empty task")
+                if backend == "codex":
+                    if request is None:
+                        raise SubagentControlError("Codex tasks require a persistent conversation")
+                    result, receipt_delivered = await self._manager.spawn_codex(
+                        task, label=label, project=project, worktree=worktree, request=request,
+                        base_ref=base_ref, resume_task_id=resume_task_id, adopt_branch=adopt_branch,
+                    )
+                    if receipt_delivered:
+                        record_message_delivery(request.channel, request.chat_id)
+                    return result
                 return await self._create_task(
                     task, label, temperature, wait, project, resume_task_id, reply_first, worktree,
+                    base_ref=base_ref, adopt_branch=adopt_branch,
                 )
             if not owner:
                 raise SubagentControlError("task unavailable")
@@ -170,7 +179,6 @@ class SubagentTool(Tool):
                     "projects": {
                         name: str(config.repository.expanduser().resolve())
                         for name, config in self._manager.tools_config.subagent.projects.items()
-                        if config.allows(owner)
                     },
                 }, ensure_ascii=False)
             if action in {"send", "cancel"}:
@@ -196,54 +204,10 @@ class SubagentTool(Tool):
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
 
-    async def _delegate_codex(
-        self, action: str, task: str | None, label: str | None, project: str | None,
-        worktree: bool | None, delegation_id: str | None,
-    ) -> str:
-        request = current_request_context()
-        if request is None or not request.session_key or not request.persist_session or not request.sender_id:
-            raise SubagentControlError("Codex tasks require an explicit request in a persistent conversation")
-        owner = request.session_key
-        original_command = request.metadata.get("original_command")
-        text = original_command if isinstance(original_command, str) else request.original_user_text or ""
-        explicit = bool(request.original_user_text and _CODEX_DELEGATION.match(text.strip()))
-        sessions = self._manager.sessions
-        if sessions is None or not self._manager.tools_config.subagent.codex.enabled:
-            raise SubagentControlError("Codex tasks are disabled (tools.subagent.codex.enabled)")
-        if action == "prepare":
-            if not explicit:
-                raise SubagentControlError("the user must explicitly ask Codex to do the task")
-            draft_id = str(uuid.uuid4())
-            await sessions.sessions.state.update_metadata(
-                owner, {_CODEX_DRAFT_KEY: {"id": draft_id, "sender": request.sender_id, "created_at": time.time()}},
-                expected_generation=request.session_generation,
-            )
-            return json.dumps({"delegation_id": draft_id})
-        if not task or not task.strip():
-            raise SubagentControlError("create requires a non-empty task")
-        if not explicit:
-            session = await sessions.sessions.state.get_header(owner)
-            draft = session.metadata.get(_CODEX_DRAFT_KEY)
-            if (not delegation_id or not isinstance(draft, dict) or draft.get("id") != delegation_id
-                    or draft.get("sender") != request.sender_id
-                    or not isinstance(created := draft.get("created_at"), (int, float))
-                    or time.time() - created > 3600):
-                raise SubagentControlError("the user must explicitly ask Codex to do the task")
-        result, receipt_delivered = await self._manager.spawn_codex(
-            task, label=label, project=project, worktree=worktree, request=request,
-        )
-        if receipt_delivered:
-            record_message_delivery(request.channel, request.chat_id)
-        if delegation_id and not explicit:
-            await sessions.sessions.state.update_metadata(
-                owner, {}, remove=(_CODEX_DRAFT_KEY,), expected_generation=request.session_generation,
-            )
-        return result
-
     async def _create_task(
         self, task: str, label: str | None, temperature: float | None, wait: bool,
         project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False,
-        worktree: bool | None = None,
+        worktree: bool | None = None, *, base_ref: str | None = None, adopt_branch: str | None = None,
     ) -> str:
         request_ctx = current_request_context()
         if request_ctx is None or request_ctx.runtime is None:
@@ -260,7 +224,10 @@ class SubagentTool(Tool):
             return ToolResult.error("Error: reply_first requires wait=false and background result delivery")
         method = self._manager.run_inline if inline else partial(self._manager.spawn, reply_first=reply_first)
         if not inline:
-            method = partial(method, origin_route=notification_metadata(origin_channel, request_ctx.metadata))
+            method = partial(
+                method, origin_route=notification_metadata(origin_channel, request_ctx.metadata),
+                sender_id=request_ctx.sender_id,
+            )
         return await method(
             task=task,
             runtime=request_ctx.runtime,
@@ -275,6 +242,8 @@ class SubagentTool(Tool):
             project=project,
             worktree=worktree,
             resume_task_id=resume_task_id,
+            base_ref=base_ref,
+            adopt_branch=adopt_branch,
             session_policy=SessionPolicy(
                 persist=request_ctx.persist_session,
                 log_content=request_ctx.log_content,
