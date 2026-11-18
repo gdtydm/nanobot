@@ -51,6 +51,14 @@ class ToolRegistry:
         """Get a tool by name."""
         return self._tools.get(name)
 
+    def without(self, name: str) -> ToolRegistry:
+        """Return a per-request view omitting one tool without changing shared schemas."""
+        if name not in self._tools:
+            return self
+        view = ToolRegistry()
+        view._tools = {key: tool for key, tool in self._tools.items() if key != name}
+        return view
+
     def get_runtime_context_providers(self) -> list[RuntimeContextProvider]:
         """Return tool-owned providers in stable tool-name order."""
         providers: list[RuntimeContextProvider] = []

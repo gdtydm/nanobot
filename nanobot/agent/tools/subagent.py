@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 from nanobot.agent.subagent import SubagentControlError
 from nanobot.agent.tools.base import Tool, ToolResult, tool_parameters
+from nanobot.agent.tools.codex_task import create_codex_task
 from nanobot.agent.tools.context import current_request_context, current_request_session_key
-from nanobot.agent.tools.message import record_message_delivery
 from nanobot.agent.tools.schema import (
     BooleanSchema,
     NumberSchema,
@@ -22,6 +22,7 @@ from nanobot.session.manager import SessionPolicy
 
 if TYPE_CHECKING:
     from nanobot.agent.subagent import SubagentManager
+    from nanobot.agent.subagent_status import SubagentKind
     from nanobot.agent.tools.context import ToolContext
 
 
@@ -33,6 +34,11 @@ if TYPE_CHECKING:
     ),
     task=StringSchema("Required for create: the task for the subagent to complete.", min_length=1),
     label=StringSchema("Display label for create."),
+    kind=StringSchema(
+        "Native create: use code_change for repository implementation or fixes so managed worktrees "
+        "receive automatic review. Use general for research, diagnosis and routine operations.",
+        enum=("general", "code_change"),
+    ),
     backend=StringSchema(
         "Backend for create. native is the default and uses the parent model and nanobot tools. "
         "codex runs in a Codex thread and requires a gateway that enables it, a persistent conversation, "
@@ -44,10 +50,7 @@ if TYPE_CHECKING:
         "For send to a Codex task in waiting_input. Pass its current question ID from check to answer "
         "and continue the task."
     ),
-    project=StringSchema(
-        "For create: a gateway-configured project that selects the working directory. Native loads the "
-        "project rules and skills. Codex uses its own agent context in the selected checkout."
-    ),
+    project=StringSchema("For create: configured project that supplies the working directory, rules and skills."),
     worktree=BooleanSchema(
         description=(
             "For a project create: false uses the existing repository checkout; true uses an isolated Git worktree. "
@@ -55,9 +58,8 @@ if TYPE_CHECKING:
         ),
     ),
     resume_task_id=StringSchema(
-        "On create, pass the full ID of a finished task in this conversation. Native requires the original "
-        "project and a prepared worktree, which it reuses in a fresh task. With backend=codex, pass a finished "
-        "Codex task to reuse its saved thread and checkout when available. Put remaining work in task."
+        "On create, pass the full ID of a finished native task in this conversation. Use the original "
+        "project and its prepared worktree. Put remaining work in task."
     ),
     base_ref=StringSchema(
         "Git revision for a new project worktree, such as origin/main or a commit ID. Defaults to HEAD.",
@@ -76,8 +78,7 @@ if TYPE_CHECKING:
         description=(
             "For native create: true waits for the result. false runs in the background in a persistent "
             "conversation that supports background results. Otherwise, native waits inline. Native worktrees "
-            "require background execution with wait=false. Codex decides from the caller's ability to receive "
-            "background results."
+            "require background execution with wait=false."
         ),
         default=False,
     ),
@@ -120,17 +121,13 @@ class SubagentTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Delegate multi-step or time-consuming work in the current conversation. Use create with the task scope, "
+            "Create a native NanoBot subagent or manage either kind of delegated task. Use create with the task scope, "
             "constraints, and expected result. For configured projects, set project and worktree explicitly.\n\n"
-            "Native is the default. It uses the parent model and nanobot tools. Use wait=false for background work "
+            "Native uses the parent model and NanoBot tools. Prefer it for work that needs NanoBot project skills, "
+            "tools or identity. Use wait=false for background work "
             "when supported, or wait=true for an inline result. Native worktrees require background execution. To "
             "continue in a finished task's prepared worktree, use create with the original project and resume_task_id. "
             "Give the new task the remaining work and relevant context.\n\n"
-            "Use backend=codex when the task needs Codex and the gateway enables it. Read applicable project "
-            "instructions first. Codex requires a persistent conversation and sender identity. It waits for a result "
-            "or question when the caller cannot receive background results. To continue a finished Codex task, use "
-            "create with backend=codex and resume_task_id to reopen its saved thread when available. Codex can "
-            "also resume tasks started without a worktree.\n\n"
             "Use send to add instructions to queued or running tasks. If Codex pauses in waiting_input, get its "
             "question_id with check and include it in send with the answer. "
             "Use check to discover projects, find tasks, or read status and results by task_id. Use cancel to stop a task. "
@@ -143,6 +140,15 @@ class SubagentTool(Tool):
     def concurrency_safe(self) -> bool:
         return True
 
+    def to_schema(self) -> dict[str, Any]:
+        schema = super().to_schema()
+        # Retain the execution schema for legacy callers without advertising the old route.
+        params = schema["function"]["parameters"]
+        schema["function"]["parameters"] = {
+            **params, "properties": {name: value for name, value in params["properties"].items() if name != "backend"},
+        }
+        return schema
+
     async def execute(
         self, action: str, task_id: str | None = None, message: str | None = None,
         task: str | None = None, label: str | None = None,
@@ -150,6 +156,7 @@ class SubagentTool(Tool):
         project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False,
         worktree: bool | None = None, backend: str = "native", query: str | None = None,
         question_id: str | None = None, base_ref: str | None = None, adopt_branch: str | None = None,
+        kind: SubagentKind | None = None,
         **kwargs: Any,
     ) -> str:
         owner = current_request_session_key()
@@ -159,18 +166,13 @@ class SubagentTool(Tool):
                 if not task or not task.strip():
                     return ToolResult.error("Error: create requires a non-empty task")
                 if backend == "codex":
-                    if request is None:
-                        raise SubagentControlError("Codex tasks require a persistent conversation")
-                    result, receipt_delivered = await self._manager.spawn_codex(
-                        task, label=label, project=project, worktree=worktree, request=request,
+                    return await create_codex_task(
+                        self._manager, task=task, label=label, project=project, worktree=worktree,
                         base_ref=base_ref, resume_task_id=resume_task_id, adopt_branch=adopt_branch,
                     )
-                    if receipt_delivered:
-                        record_message_delivery(request.channel, request.chat_id)
-                    return result
                 return await self._create_task(
                     task, label, temperature, wait, project, resume_task_id, reply_first, worktree,
-                    base_ref=base_ref, adopt_branch=adopt_branch,
+                    base_ref=base_ref, adopt_branch=adopt_branch, kind=kind,
                 )
             if not owner:
                 raise SubagentControlError("task unavailable")
@@ -225,6 +227,7 @@ class SubagentTool(Tool):
         self, task: str, label: str | None, temperature: float | None, wait: bool,
         project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False,
         worktree: bool | None = None, *, base_ref: str | None = None, adopt_branch: str | None = None,
+        kind: SubagentKind | None = None,
     ) -> str:
         request_ctx = current_request_context()
         if request_ctx is None or request_ctx.runtime is None:
@@ -261,6 +264,7 @@ class SubagentTool(Tool):
             resume_task_id=resume_task_id,
             base_ref=base_ref,
             adopt_branch=adopt_branch,
+            kind=kind,
             session_policy=SessionPolicy(
                 persist=request_ctx.persist_session,
                 log_content=request_ctx.log_content,

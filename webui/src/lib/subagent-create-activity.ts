@@ -3,8 +3,9 @@ import type { ToolProgressEvent, UIMessage } from "@/lib/types";
 
 /** Only successful create activity has a dedicated task surface. */
 function isSubagentCreateActivity(event: ToolProgressEvent): boolean {
-  if (event.name !== "subagent" || (event.phase !== "start" && event.phase !== "end")
-    || event.error != null) return false;
+  if ((event.phase !== "start" && event.phase !== "end") || event.error != null) return false;
+  if (event.name === "codex_task") return true;
+  if (event.name !== "subagent") return false;
   let args = event.arguments;
   if (typeof args === "string") {
     try { args = JSON.parse(args); } catch { return false; }

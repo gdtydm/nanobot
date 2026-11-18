@@ -309,11 +309,41 @@ class _DelegationProvider(LLMProvider):
             status = json.loads(messages[-1]["content"])
             status = status.get("task", status)
             return LLMResponse(content=f"{status['reference']} {status['question'] or status['result']}")
-        arguments = self.answer or {"action": "create", "backend": "codex", "task": "Compare candidates"}
+        tool = "subagent" if self.answer is not None else "codex_task"
+        arguments = self.answer if self.answer is not None else {"task": "Compare candidates"}
+        assert any(schema["function"]["name"] == tool for schema in tools or [])
         return LLMResponse(
             content=None,
-            tool_calls=[ToolCallRequest(id=f"codex_{uuid4().hex}", name="subagent", arguments=arguments)],
+            tool_calls=[ToolCallRequest(id=f"codex_{uuid4().hex}", name=tool, arguments=arguments)],
         )
+
+
+@pytest.mark.asyncio
+async def test_codex_creation_is_visible_only_in_eligible_requests(tmp_path, codex_project):
+    repo, executable = codex_project
+
+    class InventoryProvider(_DelegationProvider):
+        async def chat(self, messages, tools=None, **kwargs):
+            names = {schema["function"]["name"] for schema in tools or []}
+            assert "subagent" in names
+            return LLMResponse(content="Codex available" if "codex_task" in names else "Codex unavailable")
+
+    loop = AgentLoop(
+        bus=MessageBus(), provider=InventoryProvider(), workspace=repo,
+        session_manager=SessionManager(repo, sessions_root=tmp_path / "inventory-sessions"),
+        tools_config=ToolsConfig(subagent=SubagentToolConfig(
+            codex=CodexTaskConfig(enabled=True, executable=str(executable)),
+        )),
+    )
+    try:
+        temporary, persistent = await asyncio.gather(
+            loop.process_direct("Temporary capabilities", session_key="cli:temporary", ephemeral=True),
+            loop.process_direct("Persistent capabilities", session_key="cli:persistent"),
+        )
+        assert temporary.content == "Codex unavailable"
+        assert persistent.content == "Codex available"
+    finally:
+        await loop.aclose()
 
 
 @pytest.mark.asyncio

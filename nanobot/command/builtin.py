@@ -940,7 +940,8 @@ async def cmd_codex(command: CommandInput) -> CommandExpansion | OutboundMessage
     return CommandExpansion(replace(
         msg,
         content="The user explicitly delegated this task to Codex. Resolve the project and task requirements, "
-                "then use subagent with backend=codex.\n\n" + command.args.strip(),
+                "then use codex_task. If it is unavailable, report that without changing backends.\n\n"
+                + command.args.strip(),
         metadata={**msg.metadata, "original_command": msg.content},
     ), temporary_session_error="Codex tasks require a persistent conversation.")
 

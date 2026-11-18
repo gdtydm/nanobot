@@ -1277,6 +1277,11 @@ class AgentLoop:
             ),
         )
         effective_tools = tools if tools is not None else self.tools
+        if effective_tools.has("codex_task"):
+            from nanobot.agent.tools.codex_task import codex_task_available
+
+            if not codex_task_available(request_ctx):
+                effective_tools = effective_tools.without("codex_task")
         file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
         request_token = bind_request_context(request_ctx)
         workspace_token = bind_workspace_scope(effective_scope)

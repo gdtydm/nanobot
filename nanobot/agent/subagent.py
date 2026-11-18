@@ -27,8 +27,23 @@ from nanobot.agent.subagent_project import (
     prepare_project_worktree,
     reclaim_project_worktrees,
 )
+from nanobot.agent.subagent_review import (
+    MAX_REVISIONS,
+    REVIEW_INSTRUCTIONS,
+    ReviewReadTool,
+    ReviewUnavailableError,
+    ReviewVerdict,
+    ReviewWorktree,
+    review_input,
+)
 from nanobot.agent.subagent_sessions import SubagentSessions
-from nanobot.agent.subagent_status import SubagentBackend, SubagentSessionError, SubagentStatus
+from nanobot.agent.subagent_status import (
+    SubagentBackend,
+    SubagentKind,
+    SubagentReview,
+    SubagentSessionError,
+    SubagentStatus,
+)
 from nanobot.agent.subagent_status import SubagentState as SubagentState
 from nanobot.agent.subagent_trace import SubagentRequestTrace
 from nanobot.agent.tools.base import Tool, ToolResult
@@ -54,7 +69,7 @@ from nanobot.config.schema import AgentDefaults, ToolsConfig
 from nanobot.context_sources import capture_sources, without_source_capture
 from nanobot.events import AgentEvent, EventSink
 from nanobot.llm_usage.context import LLMUsageSource, current_llm_usage_source
-from nanobot.providers.base import LLMProvider, ToolCallRequest
+from nanobot.providers.base import LLMProvider, LLMUsage, ToolCallRequest
 from nanobot.security.workspace_access import (
     WorkspaceScope,
     bind_workspace_scope,
@@ -695,6 +710,7 @@ class SubagentManager:
         backend: SubagentBackend = "native", sender_id: str | None = None,
         origin_route: dict[str, Any] | None = None,
         origin_generation: str | None = None,
+        kind: SubagentKind | None = None,
     ) -> _SubagentTask:
         self.bus.admission.check()
         if runtime is None and backend == "native":
@@ -790,6 +806,8 @@ class SubagentManager:
             adopt_branch=adopt_branch,
             reply_first=reply_first,
             backend=backend,
+            kind=kind if kind is not None else previous.kind if previous is not None and backend == "native" else "general",
+            review_base=previous.review_base if previous is not None and adopt_branch is None else None,
             origin_sender_id=sender_id if backend == "codex" else None,
             origin_generation=origin_generation,
             origin_channel=origin_channel if backend == "codex" else None,
@@ -1084,6 +1102,7 @@ class SubagentManager:
         sender_id: str | None = None,
         base_ref: str | None = None,
         adopt_branch: str | None = None,
+        kind: SubagentKind | None = None,
     ) -> str:
         """Start background work and route its terminal result to the parent."""
         try:
@@ -1092,7 +1111,7 @@ class SubagentManager:
                 origin_message_id, temperature, workspace_scope, runtime, announce=True, origin_turn_id=origin_turn_id,
                 session_policy=session_policy, project=project, resume_task_id=resume_task_id,
                 reply_first=reply_first, worktree=worktree, origin_route=origin_route, sender_id=sender_id,
-                base_ref=base_ref, adopt_branch=adopt_branch,
+                base_ref=base_ref, adopt_branch=adopt_branch, kind=kind,
             )
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
@@ -1128,6 +1147,7 @@ class SubagentManager:
         resume_task_id: str | None = None,
         base_ref: str | None = None,
         adopt_branch: str | None = None,
+        kind: SubagentKind | None = None,
     ) -> str:
         """Wait for the same task lifecycle without a background notice."""
         try:
@@ -1135,7 +1155,7 @@ class SubagentManager:
                 task, label, origin_channel, origin_chat_id, session_key,
                 origin_message_id, temperature, workspace_scope, runtime, announce=False, origin_turn_id=origin_turn_id,
                 session_policy=session_policy, project=project, worktree=worktree, resume_task_id=resume_task_id,
-                base_ref=base_ref, adopt_branch=adopt_branch,
+                base_ref=base_ref, adopt_branch=adopt_branch, kind=kind,
             )
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
@@ -1156,6 +1176,8 @@ class SubagentManager:
             return ToolResult.error(error + (f"\nPartial result:\n{result}" if error != result else ""))
         if record.status.state == "incomplete":
             return ToolResult.error(f"Task incomplete ({record.status.stop_reason}).\n{result}")
+        if record.status.review is not None and record.status.review.verdict == "skipped":
+            return f"{result}\n\n{record.status.review.summary}"
         return result
 
     def _task_done(self, record: _SubagentTask, task: asyncio.Task[str]) -> None:
@@ -1252,7 +1274,7 @@ class SubagentManager:
                         await self._save_status(status)
                         record.raise_if_stopping()
                 outcome = (await self._run_codex(record) if status.backend == "codex"
-                           else await self._run_admitted_subagent(record))
+                           else await self._run_native(record))
                 if outcome is not None:
                     record.decide(outcome)
             if outcome is None:
@@ -1283,6 +1305,7 @@ class SubagentManager:
                 stop_reason=status.stop_reason, error=status.error, partial_result=status.partial,
                 project_status=status if status.project is not None else None,
                 reply_first=status.reply_first,
+                review=status.review,
             )
         if outcome.state == "cancelled":
             raise asyncio.CancelledError
@@ -1402,7 +1425,123 @@ class SubagentManager:
             ))
         return "Milestone recorded."
 
-    async def _run_admitted_subagent(self, record: _SubagentTask) -> _SubagentOutcome:
+    async def _run_native(self, record: _SubagentTask) -> _SubagentOutcome:
+        status = record.status
+        if status.kind != "code_change":
+            return await self._run_admitted_subagent(record)
+        if not self.tools_config.subagent.native_review.enabled or status.worktree is None:
+            reason = ("Automatic review is disabled." if status.worktree is not None
+                      else "Automatic review requires a managed project worktree.")
+            status.review = SubagentReview("skipped", reason)
+            return await self._run_admitted_subagent(record)
+
+        review_round = 0
+        candidate_id = None
+        outcome = None
+        try:
+            try:
+                worktree = await ReviewWorktree.open(Path(status.worktree), status.review_base)
+            except (OSError, TimeoutError, ReviewUnavailableError) as exc:
+                outcome = await self._run_admitted_subagent(record)
+                if outcome.state != "done":
+                    return outcome
+                raise ReviewUnavailableError(f"Could not establish the review baseline: {exc}") from exc
+            status.review_base = worktree.base
+            await self._save_status(status)
+            record.exec_manager.capture_version = worktree.command_version
+            outcome = await self._run_admitted_subagent(record)
+            total_usage = status.usage
+            for attempt in range(MAX_REVISIONS + 1):
+                if outcome.state != "done":
+                    return outcome
+                record.raise_if_stopping()
+                if record.exec_manager.has_pending_work:
+                    feedback = "A command is still running. Collect its result or stop it before handing off."
+                elif record.inbox:
+                    feedback = "Apply the latest user instructions before handing the result to review."
+                else:
+                    candidate = await worktree.snapshot()
+                    candidate_id = candidate.fingerprint
+                    status.phase = "reviewing"
+                    await self._save_status(status)
+                    record.raise_if_stopping()
+                    review_round += 1
+                    verdict, usage = await self._review_native_candidate(record, worktree, review_input(
+                        status.task_description,
+                        [message["content"] for message in record.session.messages
+                         if message.get("role") == "user" and HIDDEN_HISTORY_META not in message
+                         and isinstance(message.get("content"), str) and message["content"] != status.task_description],
+                        outcome.result, candidate, record.exec_manager.evidence,
+                    ))
+                    total_usage = self._sum_usage(total_usage, usage)
+                    status.usage = total_usage
+                    if ((await worktree.snapshot()).fingerprint != candidate_id
+                            or record.inbox or record.exec_manager.has_pending_work):
+                        feedback = "The worktree or user requirements changed during review. Verify the current candidate."
+                    elif verdict.verdict == "pass":
+                        status.review = SubagentReview("pass", verdict.summary, review_round, candidate_id)
+                        return outcome
+                    elif verdict.verdict == "inconclusive":
+                        raise ReviewUnavailableError(verdict.summary)
+                    else:
+                        feedback = "\n".join(
+                            f"{item.path}{f':{item.line}' if item.line is not None else ''} · {item.requirement}\n"
+                            f"Trigger: {item.trigger}\nRequested change: {item.change}"
+                            for item in verdict.findings
+                        )
+                        status.review = SubagentReview("changes_requested", feedback, review_round, candidate_id)
+                if attempt == MAX_REVISIONS:
+                    raise ReviewUnavailableError(f"Automatic review reached its revision limit. {feedback}")
+                status.phase = "revising"
+                await self._save_status(status)
+                record.raise_if_stopping()
+                outcome = await self._run_admitted_subagent(record, review_feedback=feedback)
+                total_usage = self._sum_usage(total_usage, status.usage)
+                status.usage = total_usage
+        except ReviewUnavailableError as exc:
+            summary = str(exc)[:self.max_tool_result_chars]
+            status.review = SubagentReview("inconclusive", summary, review_round, candidate_id)
+            return _SubagentOutcome("incomplete", outcome.result if outcome else summary, "review_incomplete", summary)
+        raise AssertionError("Review loop must settle the native task")
+
+    @staticmethod
+    def _sum_usage(left: LLMUsage | None, right: LLMUsage | None) -> LLMUsage | None:
+        return left + right if left is not None and right is not None else left or right
+
+    async def _review_native_candidate(
+        self, record: _SubagentTask, worktree: ReviewWorktree, evidence: str,
+    ) -> tuple[ReviewVerdict, LLMUsage | None]:
+        runtime = record.runtime
+        assert runtime is not None
+        tools = ToolRegistry()
+        tools.register(ReviewReadTool(worktree.root))
+        definitions = tools.get_definitions()
+        result = await self.runner.run(AgentRunSpec(
+            initial_messages=[
+                {"role": "system", "content": REVIEW_INSTRUCTIONS},
+                {"role": "user", "content": evidence},
+            ],
+            tools=tools, runtime=runtime, max_iterations=6,
+            max_tool_result_chars=self.max_tool_result_chars,
+            finalize_on_max_iterations=False, error_message=None,
+            consolidate_history=partial(
+                self.consolidator.summarize_transcript, runtime=runtime,
+                session_key=record.session.key, tools=definitions, persist=False,
+            ),
+            consolidate_provider_compaction=partial(
+                self.consolidator.summarize_provider_compaction, runtime=runtime,
+                session_key=record.session.key, tools=definitions, persist=False,
+            ),
+            llm_usage_source=record.origin.get("llm_usage_source"),
+        ))
+        record.raise_if_stopping()
+        if result.stop_reason != "completed" or not result.final_content:
+            raise ReviewUnavailableError("The reviewer ended without completing the review.")
+        return ReviewVerdict.parse(result.final_content), result.usage
+
+    async def _run_admitted_subagent(
+        self, record: _SubagentTask, *, review_feedback: str | None = None,
+    ) -> _SubagentOutcome:
         status, origin, runtime = record.status, record.origin, record.runtime
         assert runtime is not None
         task_id, label = status.task_id, status.label
@@ -1452,6 +1591,14 @@ class SubagentManager:
             {"role": "system", "content": system_prompt},
             *record.session.get_history(),
         ]
+        if review_feedback is not None:
+            messages.append({
+                "role": "user",
+                "content": "Continue under the original task scope and permissions. Verify this internal review feedback "
+                           "against the task, address any remaining issues, and run the relevant checks.\n\n"
+                           + review_feedback,
+                HIDDEN_HISTORY_META: {"kind": "internal_continuation"},
+            })
         activity = SessionActivity()
 
         async def save_observation(status: SubagentStatus) -> None:
@@ -1572,6 +1719,7 @@ class SubagentManager:
         partial_result: bool = False,
         project_status: SubagentStatus | None = None,
         reply_first: bool = False,
+        review: SubagentReview | None = None,
     ) -> None:
         status_text = {
             "ok": "completed successfully", "cancelled": "was cancelled",
@@ -1591,6 +1739,7 @@ class SubagentManager:
             project=project_status.project if project_status else None,
             worktree=project_status.worktree if project_status else None,
             branch=project_status.branch if project_status else None,
+            review=review,
         )
 
         # Inject as system message to trigger main agent.

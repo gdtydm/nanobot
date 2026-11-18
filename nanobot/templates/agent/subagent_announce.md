@@ -11,6 +11,9 @@ Branch: {{ branch }}
 
 Result:
 {{ result }}
+{% if review %}
+Code review: {{ review.verdict }} ({{ review.round }} review rounds). {{ review.summary }}
+{% endif %}
 {% if stop_reason %}
 Exit reason: {{ stop_reason }}
 {% endif %}

@@ -10,10 +10,19 @@ SubagentState = Literal[
     "queued", "running", "waiting_input", "stopping", "done", "incomplete", "error", "cancelled", "interrupted",
 ]
 SubagentBackend = Literal["native", "codex"]
+SubagentKind = Literal["general", "code_change"]
 
 
 class SubagentSessionError(ValueError):
     """A private task session could not be read safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentReview:
+    verdict: Literal["pass", "changes_requested", "inconclusive", "skipped"]
+    summary: str
+    round: int = 0
+    candidate: str | None = None
 
 
 @dataclass(slots=True)
@@ -51,6 +60,9 @@ class SubagentStatus:
     adopt_branch: str | None = None
     reply_first: bool = False
     backend: SubagentBackend = "native"
+    kind: SubagentKind = "general"
+    review_base: str | None = None
+    review: SubagentReview | None = None
     progress: str | None = None
     progress_at: float | None = None
     question: str | None = None
@@ -101,6 +113,9 @@ class SubagentStatus:
             "resume_task_id": self.resume_task_id,
             "base_ref": self.base_ref,
             "backend": self.backend,
+            "kind": self.kind,
+            "review": ({"verdict": self.review.verdict, "summary": self.review.summary,
+                        "round": self.review.round, "candidate": self.review.candidate} if self.review else None),
             "reference": self.reference,
             "progress": self.progress,
             "progress_at": self.progress_at,

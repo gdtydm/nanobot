@@ -6,6 +6,7 @@ import shlex
 import time
 import uuid
 from collections import deque
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -87,6 +88,15 @@ class ExecSessionInfo:
     cleanup_error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ExecEvidence:
+    command: str
+    cwd: str
+    exit_code: int | None
+    finish_reason: FinishReason | None
+    version: str | None
+
+
 class _BoundedOutputBuffer:
     """Keep the first and most recent characters within a fixed budget."""
 
@@ -166,6 +176,7 @@ class _ExecSession:
         process = process_tree.process
         self.command = command
         self.cwd = cwd
+        self.review_version: str | None = None
         self.owner_session_key = owner_session_key
         self.started_at = time.monotonic() if started_at is None else started_at
         self.deadline = self.started_at + timeout if timeout else float("inf")
@@ -421,6 +432,17 @@ class ExecSessionManager:
         self._stopping_launches: set[asyncio.Task[_ExecSession]] = set()
         self._lock = asyncio.Lock()
         self._closed = False
+        self.capture_version: Callable[[str], Awaitable[str | None]] | None = None
+        self.evidence: deque[ExecEvidence] = deque(maxlen=16)
+
+    async def _remember_result(self, session: _ExecSession, poll: _SessionPoll) -> None:
+        if self.capture_version is None:
+            return
+        version = await self.capture_version(session.cwd) if session.review_version is not None else None
+        self.evidence.append(ExecEvidence(
+            session.command[:1000], session.cwd, poll.exit_code, poll.finish_reason,
+            version if version == session.review_version else None,
+        ))
 
     @property
     def has_pending_work(self) -> bool:
@@ -446,7 +468,9 @@ class ExecSessionManager:
         idle_action: Literal["report", "terminate"] = "report",
         stdin: int = asyncio.subprocess.PIPE,
         until_exit: bool = False,
+        display_command: str | None = None,
     ) -> tuple[str, _SessionPoll]:
+        version = await self.capture_version(cwd) if self.capture_version is not None else None
         async with self._lock:
             if self._closed:
                 raise RuntimeError("exec session manager is closed")
@@ -470,6 +494,9 @@ class ExecSessionManager:
             self._starting[session_id] = (owner_session_key, launch)
         try:
             session = await launch
+            session.review_version = version
+            if display_command is not None and self.capture_version is not None:
+                session.command = display_command
             if until_exit:
                 await session.wait_exit()
             poll = await session.poll(yield_time_ms, max_output_chars)
@@ -483,6 +510,7 @@ class ExecSessionManager:
             async with self._lock:
                 self._starting.pop(session_id, None)
         if poll.done:
+            await self._remember_result(session, poll)
             async with self._lock:
                 self._sessions.pop(session_id, None)
         return session_id, poll
@@ -561,6 +589,7 @@ class ExecSessionManager:
             stdin_closed=stdin_closed,
         )
         if poll.done:
+            await self._remember_result(session, poll)
             async with self._lock:
                 self._sessions.pop(session_id, None)
         return poll

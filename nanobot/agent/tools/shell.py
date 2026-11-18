@@ -279,7 +279,7 @@ class ExecTool(Tool):
             return ToolResult.error(f"Error: {exc}")
         if isinstance(prepared, str):
             return prepared
-        return await self._execute_session(prepared, yield_time_ms, max_output_chars)
+        return await self._execute_session(prepared, yield_time_ms, max_output_chars, display_command=command)
 
     async def execute_to_completion(self, command: str, working_dir: str) -> str:
         """Return the complete result for a trusted user shell command, without an agent observer."""
@@ -298,10 +298,12 @@ class ExecTool(Tool):
         max_output_chars: int | None,
         *,
         until_exit: bool = False,
+        display_command: str | None = None,
     ) -> str:
         try:
             session_id, poll = await self._session_manager.start(
                 command=prepared.command,
+                display_command=display_command,
                 cwd=prepared.cwd,
                 env=prepared.env,
                 timeout=prepared.timeout,

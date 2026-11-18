@@ -184,13 +184,15 @@ Reclaiming a checkout preserves its local branch, commits, and task history. The
 
 See [Delegated work in the WebUI](./webui.md#delegated-work) for progress and task details. WebUI temporary chats do not support subagents. SDK calls with `ephemeral=True` wait for delegated results without saving the temporary conversation or its subagent history.
 
+Native tasks marked `kind=code_change` in a managed project worktree go through automatic code review before completion. The reviewer compares the original requirements with the actual changes and completed commands. It can return issues to the same task for up to two rounds of fixes, then review the updated change. A task that exhausts this budget or cannot be reviewed keeps its partial result and can be resumed. Set `tools.subagent.nativeReview.enabled` to `false` to disable automatic review.
+
 ### Codex tasks
 
 Enable `tools.subagent.codex.enabled` on a gateway with an installed, authenticated Codex CLI. Set `executable` if the gateway cannot find `codex` on its PATH. Optional `model` and `effort` set the default for new tasks. The runner uses a workspace-write sandbox and sends eligible approval requests to Codex auto-review. Sandboxed commands have network access by default. Set `networkAccess` to `false` to disable network access inside the sandbox. This configuration applies to Codex tasks across conversation surfaces.
 
 When enabled, the agent can choose Codex as the backend for a task or follow-up in a persistent conversation. You can also request Codex directly with `/codex <task>`. The original chat receives one receipt with a task reference, followed by any questions and the terminal result. Ask for progress, give a follow-up, answer a question, or stop one task by naming it or its reference. In Feishu, Telegram, and Discord, quoting the receipt identifies the task and quoting a question identifies the pending question. A question releases the execution slot. The next answer starts a turn on the same Codex thread.
 
-To continue a terminal Codex task, the agent calls `subagent` with `action=create`, `backend=codex`, and `resume_task_id` in the originating conversation. This creates a new task entry and continues the original Codex thread when one was saved. The new task message should include the remaining work and any relevant instructions that were undelivered. Verify the state of previously submitted external work before repeating it.
+The agent uses `codex_task` to start a Codex task and `subagent` to check its status, send input, or stop it. To continue a terminal Codex task, the agent calls `codex_task` with `resume_task_id` in the originating conversation. This creates a new task entry and continues the original Codex thread when one was saved. Include the remaining work and any undelivered instructions in the new task. Verify the state of previously submitted external work before repeating it. Existing `subagent(action="create", backend="codex")` calls remain supported.
 
 Standalone CLI and SDK calls without background delivery wait for the current Codex turn to finish or ask a question. In a later call using the same persistent session, use the returned task reference to answer it. Stopping a Codex task interrupts its local turn. Remote jobs it already submitted retain their own lifecycle.
 

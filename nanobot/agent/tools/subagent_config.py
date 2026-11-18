@@ -23,6 +23,11 @@ class CodexTaskConfig(Base):
     network_access: bool = True
 
 
+class NativeReviewConfig(Base):
+    enabled: bool = True
+
+
 class SubagentToolConfig(Base):
     projects: dict[ProjectName, SubagentProjectConfig] = Field(default_factory=dict)
     codex: CodexTaskConfig = Field(default_factory=CodexTaskConfig)
+    native_review: NativeReviewConfig = Field(default_factory=NativeReviewConfig)
