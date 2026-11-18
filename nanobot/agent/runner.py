@@ -112,6 +112,7 @@ class AgentRunSpec:
     hook: AgentHook | None = None
     error_message: str | None = _DEFAULT_ERROR_MESSAGE
     max_iterations_message: str | None = None
+    empty_final_response_message: str | None = EMPTY_FINAL_RESPONSE_MESSAGE
     concurrent_tools: bool = False
     workspace: Path | None = None
     session_key: str | None = None
@@ -842,9 +843,9 @@ class AgentRunner:
                 failure_error_kind = LLMProvider.public_error_kind(response)
                 break
             if is_blank_text(clean):
-                final_content = EMPTY_FINAL_RESPONSE_MESSAGE
+                final_content = spec.empty_final_response_message
                 stop_reason = "empty_final_response"
-                error = final_content
+                error = EMPTY_FINAL_RESPONSE_MESSAGE
                 self._append_final_message(messages, final_content, response_input_ids)
                 context.final_content = final_content
                 context.error = error
@@ -891,18 +892,18 @@ class AgentRunner:
                 pending_stream_content = terminal_content
             if terminal_content is None:
                 if goal_overrun and spec.finalize_on_max_iterations:
-                    terminal_content = EMPTY_FINAL_RESPONSE_MESSAGE
+                    terminal_content = spec.empty_final_response_message
                     stop_reason = "empty_final_response"
-                    error = terminal_content
+                    error = EMPTY_FINAL_RESPONSE_MESSAGE
                     pending_stream_content = terminal_content
                 else:
                     terminal_content = self._max_iterations_fallback(spec)
             if length_recovery_parts:
-                terminal_tail = f"\n\n{terminal_content.lstrip()}"
+                terminal_tail = f"\n\n{terminal_content.lstrip()}" if terminal_content else ""
                 final_content = (
                     "".join(length_recovery_parts).rstrip() + terminal_tail
                 ).strip()
-                pending_stream_content = terminal_tail
+                pending_stream_content = terminal_tail or None
             else:
                 final_content = terminal_content
             self._append_final_message(messages, terminal_content, response_input_ids)

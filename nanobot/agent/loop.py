@@ -63,6 +63,7 @@ from nanobot.command.builtin import register_core_commands
 from nanobot.command.router import CommandExpansion, command_text
 from nanobot.config.network import NetworkConfig
 from nanobot.config.schema import AgentDefaults, ModelPresetConfig
+from nanobot.cron.session_turns import is_cron_turn
 from nanobot.events import NO_EVENTS, AgentEvent, EventSink
 from nanobot.llm_usage.context import source_from_request
 from nanobot.providers.base import LLMProvider, LLMUsage, ProviderConversationState
@@ -1318,6 +1319,9 @@ class AgentLoop:
                 transcript_input=transcript_input,
                 transcript_builder=transcript_builder,
                 hook=hook,
+                empty_final_response_message=(
+                    None if is_cron_turn(request_metadata) else EMPTY_FINAL_RESPONSE_MESSAGE
+                ),
                 concurrent_tools=True,
                 # Temporary turns use the governor's bounded in-memory results;
                 # never create durable spill files, even before discard/cancellation.
@@ -2336,7 +2340,10 @@ class AgentLoop:
             and (ctx.final_content is None or not ctx.final_content.strip())
             and not ctx.suppress_response
         ):
-            ctx.final_content = EMPTY_FINAL_RESPONSE_MESSAGE
+            if is_cron_turn(ctx.msg.metadata):
+                ctx.suppress_response = True
+            else:
+                ctx.final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
         latency_started_at = (
             ctx.run_started_at

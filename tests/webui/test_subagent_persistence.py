@@ -138,7 +138,7 @@ async def test_cancelled_task_creation_removes_committed_child(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("parent", ["websocket:parent", "feishu.lark:parent"])
+@pytest.mark.parametrize("parent", ["websocket:parent", "feishu.lark:parent", "weixin:parent@im.wechat"])
 async def test_child_thread_reads_real_session_through_parent_without_new_persistence(tmp_path, parent):
     workspace, root = tmp_path / "agent", tmp_path / "sessions"
     workspace.mkdir()
@@ -223,7 +223,7 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
         assert any(message["role"] == "tool" and "configured value" in message["content"]
                    for message in request["messages"])
         assert set(root.rglob("*")) == files_before
-        if parent.startswith("feishu"):
+        if not parent.startswith("websocket:"):
             cancel = await gateway.http.dispatch_webui_mutation(
                 connection, "subagent.cancel", {"session_key": parent, "task_id": task_id},
             )
@@ -244,7 +244,7 @@ async def test_child_thread_reads_real_session_through_parent_without_new_persis
             event["projection_id"] for event in running["events"]
         ]
         assert manager.get_running_count() == 0
-        if parent.startswith("websocket"):
+        if parent.startswith("websocket:"):
             deleted = await gateway.http.dispatch_webui_mutation(connection, "session.delete", {"key": parent})
             assert deleted.status_code == 200
         else:

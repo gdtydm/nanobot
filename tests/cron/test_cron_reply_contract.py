@@ -16,6 +16,7 @@ from nanobot.cron.session_turns import CRON_TRIGGER_META
 from nanobot.cron.types import CronSchedule
 from nanobot.providers.base import GenerationSettings, LLMResponse, ToolCallRequest
 from nanobot.session.manager import SessionManager
+from nanobot.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 
 
 @pytest.mark.asyncio
@@ -34,8 +35,14 @@ async def test_bound_job_runs_with_its_saved_session_key(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("result", ["waiting", "blank", "confirmed"])
-async def test_explicit_cron_delivery_only_sends_the_confirmed_notification(tmp_path, result):
+@pytest.mark.parametrize(("explicit_delivery", "result", "expected"), [
+    (True, "waiting", []),
+    (True, "blank", []),
+    (True, "confirmed", ["Stage3 backfill confirmed"]),
+    (False, "blank", []),
+    (False, "waiting", ["Internal check result"]),
+])
+async def test_cron_delivery_after_tool_calls(tmp_path, explicit_delivery, result, expected):
     workspace = tmp_path / "workspace"
     sessions = SessionManager(workspace)
     bus = MessageBus()
@@ -46,11 +53,12 @@ async def test_explicit_cron_delivery_only_sends_the_confirmed_notification(tmp_
         "Send a notification only after the Stage3 backfill is confirmed.",
         session_key="weixin:source", origin_channel="weixin", origin_chat_id="source",
     )
-    cron.update_job(job.id, explicit_delivery=True)
+    if explicit_delivery:
+        cron.update_job(job.id, explicit_delivery=True)
     cron = CronService(store_path)
     job = cron.list_jobs()[0]
     assert job.schedule.every_ms == 1_200_000
-    assert job.payload.explicit_delivery
+    assert job.payload.explicit_delivery is explicit_delivery
 
     provider = MagicMock(aclose=AsyncMock())
     provider.get_default_model.return_value = "test-model"
@@ -75,18 +83,29 @@ async def test_explicit_cron_delivery_only_sends_the_confirmed_notification(tmp_
     agent = AgentLoop(bus=bus, provider=provider, workspace=workspace, model="test-model",
                       session_manager=sessions, tools_config=Config().tools, cron_service=cron)
     try:
-        await run_bound_cron_job(job, agent=agent, cron=cron)
+        run = await run_bound_cron_job(job, agent=agent, cron=cron)
         assert len(requests) >= 2
-        assert "notification condition is satisfied" in requests[0]["messages"][-1]["content"]
+        if explicit_delivery:
+            assert "notification condition is satisfied" in requests[0]["messages"][-1]["content"]
         outbound = []
         while bus.outbound_size:
             message = await bus.consume_outbound()
-            assert not isinstance(message.event, (ProgressEvent, StreamDeltaEvent))
+            if explicit_delivery:
+                assert not isinstance(message.event, (ProgressEvent, StreamDeltaEvent))
             if message.event is None and message.content:
                 outbound.append((message.channel, message.chat_id, message.content))
-        assert outbound == (
-            [("weixin", "source", "Stage3 backfill confirmed")] if result == "confirmed" else []
-        )
+        assert outbound == [("weixin", "source", content) for content in expected]
+        if result == "blank":
+            assert run.response == ""
+            history = sessions.read_session_file("weixin:source")
+            assert EMPTY_FINAL_RESPONSE_MESSAGE not in json.dumps(history)
+            if not explicit_delivery:
+                requests.clear()
+                response = await agent.process_direct(
+                    "Check Stage2 now", session_key="weixin:source", channel="weixin", chat_id="source",
+                )
+                assert response is not None
+                assert response.content == EMPTY_FINAL_RESPONSE_MESSAGE
     finally:
         await agent.aclose()
 

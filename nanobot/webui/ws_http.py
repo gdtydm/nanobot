@@ -296,6 +296,12 @@ def _decode_api_key(raw_key: str) -> str | None:
     return key
 
 
+def _decode_conversation_key(raw_key: str) -> str | None:
+    # Stored channel keys are opaque identifiers. WeChat IDs can contain @.
+    key = unquote(raw_key)
+    return key if key and len(key) <= 512 and key.isprintable() else None
+
+
 def _mutation_payload(request: WsRequest) -> dict[str, Any] | None:
     payload = getattr(request, _WEBUI_MUTATION_PAYLOAD_ATTR, None)
     if not isinstance(payload, dict):
@@ -927,7 +933,7 @@ class GatewayHTTPHandler:
     async def _handle_subagents_get(self, request: WsRequest, key: str) -> Response:
         if not self.check_api_token(request):
             return _http_error(401, "Unauthorized")
-        session_key = _decode_api_key(key)
+        session_key = _decode_conversation_key(key)
         if session_key is None:
             return _http_error(400, "invalid session key")
         if not await asyncio.to_thread(self._can_read_subagent_history, session_key):
@@ -966,7 +972,7 @@ class GatewayHTTPHandler:
     def _read_subagent(self, request: WsRequest, key: str, task_id: str) -> tuple[str, SubagentStatus, Session] | Response:
         if not self.check_api_token(request):
             return _http_error(401, "Unauthorized")
-        session_key, decoded_task_id = _decode_api_key(key), _decode_api_key(task_id)
+        session_key, decoded_task_id = _decode_conversation_key(key), _decode_api_key(task_id)
         if session_key is None or decoded_task_id is None:
             return _http_error(400, "invalid task key")
         if not self._can_read_subagent_history(session_key):
@@ -1095,10 +1101,8 @@ class GatewayHTTPHandler:
 
             return await sessions.state.query_metadata(render)
 
-        # Stored channel keys are opaque database identifiers. WeChat IDs,
-        # for example, can include an @im.wechat suffix.
-        session_key = unquote(key)
-        if not session_key or len(session_key) > 512 or not session_key.isprintable():
+        session_key = _decode_conversation_key(key)
+        if session_key is None:
             return _http_error(400, "invalid session key")
         query = _parse_query(request.path)
         raw_before = _query_first(query, "before")
