@@ -600,10 +600,12 @@ class SubagentManager:
 
     async def find_tasks(
         self, owner: str, query: str | None = None, *, sender_id: str | None = None,
+        backend: SubagentBackend | None = None,
     ) -> list[SubagentStatus]:
         tasks = [
             status for status in (await self.read_statuses_for_session(owner)).values()
-            if status.backend == "native" or sender_id is None or status.origin_sender_id in (None, sender_id)
+            if (backend is None or status.backend == backend)
+            and (status.backend == "native" or sender_id is None or status.origin_sender_id in (None, sender_id))
         ]
         tasks.sort(key=lambda status: (status.finished_at is None, status.created_at), reverse=True)
         if not query:
@@ -617,14 +619,17 @@ class SubagentManager:
 
     async def resolve_task(
         self, task_id: str, owner: str, *, sender_id: str | None = None,
+        backend: SubagentBackend | None = None,
     ) -> SubagentStatus:
         try:
             status = self.check(task_id, owner)
         except SubagentControlError:
-            matches = await self.find_tasks(owner, task_id, sender_id=sender_id)
+            matches = await self.find_tasks(owner, task_id, sender_id=sender_id, backend=backend)
             if len(matches) != 1 or matches[0].reference != task_id.casefold().lstrip("#"):
                 raise SubagentControlError("task unavailable") from None
             status = matches[0]
+        if backend is not None and status.backend != backend:
+            raise SubagentControlError("task unavailable")
         self._check_codex_sender(status, sender_id)
         return status
 
@@ -724,11 +729,11 @@ class SubagentManager:
         if resume_task_id is not None:
             previous = self._owned_status(resume_task_id, owner)
             self._check_codex_sender(previous, sender_id)
+            if previous.backend != backend:
+                raise SubagentControlError(f"resume_task_id must refer to a {backend} task")
             if previous.finished_at is None:
                 raise SubagentControlError("resume_task_id requires a finished task")
             if backend == "codex":
-                if previous.backend != "codex":
-                    raise SubagentControlError("Codex can resume only a Codex task")
                 if project is None:
                     project = previous.project
             elif previous.worktree_id is None or project is None:

@@ -13,6 +13,7 @@ from nanobot.agent.loop import AgentLoop
 from nanobot.agent.memory import Consolidator
 from nanobot.agent.subagent import SubagentControlError, SubagentManager
 from nanobot.agent.subagent_project import reclaim_project_worktrees
+from nanobot.agent.tools.codex_task import CodexTaskTool
 from nanobot.agent.tools.context import RequestContext, request_context
 from nanobot.agent.tools.subagent import SubagentTool
 from nanobot.agent.tools.subagent_config import (
@@ -132,10 +133,10 @@ async def test_codex_waiting_task_resumes_same_thread_after_restart(tmp_path, co
     )
     try:
         with request_context(context):
-            tool = SubagentTool(manager)
+            tool = CodexTaskTool(manager)
             assert json.loads(await tool.execute(action="check"))["projects"] == {"beacon": str(repo)}
             result = json.loads(await tool.execute(
-                action="create", backend="codex", task="Compare candidates", label="Beacon evaluation", project="beacon",
+                action="create", task="Compare candidates", label="Beacon evaluation", project="beacon",
             ))
         task_id = result["task_id"]
         receipt = await asyncio.wait_for(notices.get(), 5)
@@ -224,11 +225,11 @@ async def test_codex_continues_terminal_task_on_adopted_worktree_branch(tmp_path
 
     async def use_tool(input_id, *, sender="owner", **kwargs):
         with request_context(replace(request, message_id=input_id, sender_id=sender)):
-            return await SubagentTool(manager).execute(**kwargs)
+            return await CodexTaskTool(manager).execute(**kwargs)
 
     try:
         original = json.loads(await use_tool(
-            "create", action="create", backend="codex", task="Compare candidates",
+            "create", action="create", task="Compare candidates",
             project="beacon", worktree=True, base_ref="origin/main",
         ))
         assert original["state"] == "waiting_input"
@@ -249,7 +250,7 @@ async def test_codex_continues_terminal_task_on_adopted_worktree_branch(tmp_path
 
         manager, sessions = start_manager()
         continuation = {
-            "action": "create", "backend": "codex", "resume_task_id": original_id,
+            "action": "create", "resume_task_id": original_id,
             "task": "Evaluate January using the existing notes.",
         }
         rejected = await use_tool("resume-other", sender="other", **continuation)
@@ -283,7 +284,7 @@ async def test_codex_continues_terminal_task_on_adopted_worktree_branch(tmp_path
         manager.send_task_notice = deliver
         with request_context(replace(request, message_id="resume-again", can_receive_background_results=True)):
             async with asyncio.timeout(5):
-                reopened = json.loads(await SubagentTool(manager).execute(**continuation))
+                reopened = json.loads(await CodexTaskTool(manager).execute(**continuation))
                 receipt = await notices.get()
                 finished = await notices.get()
         assert reopened["reference"] in receipt.content and "Queued" in receipt.content
@@ -309,8 +310,8 @@ class _DelegationProvider(LLMProvider):
             status = json.loads(messages[-1]["content"])
             status = status.get("task", status)
             return LLMResponse(content=f"{status['reference']} {status['question'] or status['result']}")
-        tool = "subagent" if self.answer is not None else "codex_task"
-        arguments = self.answer if self.answer is not None else {"task": "Compare candidates"}
+        tool = "codex_task"
+        arguments = self.answer if self.answer is not None else {"action": "create", "task": "Compare candidates"}
         assert any(schema["function"]["name"] == tool for schema in tools or [])
         return LLMResponse(
             content=None,
@@ -383,7 +384,7 @@ async def test_native_result_can_start_codex_task_for_original_sender(tmp_path, 
         with request_context(RequestContext(
             "cli", "direct", session_key=owner, sender_id="owner", can_receive_background_results=False,
         )):
-            receipt = json.loads(await tool.execute(
+            receipt = json.loads(await CodexTaskTool(loop.subagents).execute(
                 action="send", task_id=task.reference, question_id=task.question_id, message="January",
             ))
         assert receipt["task"]["state"] == "done"
@@ -425,7 +426,7 @@ async def test_codex_command_uses_shared_worker_from_direct_cli(tmp_path, codex_
     assert completed.state == "done" and completed.codex_thread == pending.codex_thread
     assert reply is not None and "Evaluated in the original thread" in reply.content
     reply, continued = await run_once("Continue the evaluation", answer={
-        "action": "create", "backend": "codex", "resume_task_id": completed.task_id,
+        "action": "create", "resume_task_id": completed.task_id,
         "task": "Check January with the updated criteria",
     })
     assert reply is not None and continued.reference in reply.content

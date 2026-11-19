@@ -739,10 +739,10 @@ async def test_subagent_check_retained_results_and_receipts_are_scoped_and_detac
             snapshot.result = "tampered"
             assert json.loads(await loop.tools.execute("subagent", params)) == result
             listed = json.loads(await loop.tools.execute("subagent", {"action": "check"}))
-            assert listed == {"tasks": [result]}
+            assert listed == {"tasks": [result], "projects": {}}
             with request_context(RequestContext("test", "route", session_key="owner:b")):
                 assert "unavailable" in await loop.tools.execute("subagent", params)
-                assert json.loads(await loop.tools.execute("subagent", {"action": "check"})) == {"tasks": []}
+                assert json.loads(await loop.tools.execute("subagent", {"action": "check"})) == {"tasks": [], "projects": {}}
     finally:
         release.set()
         await manager.close()
