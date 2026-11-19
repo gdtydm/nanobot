@@ -5,7 +5,10 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 import uuid
+from functools import partial
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,19 +17,24 @@ from loguru import logger
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.memory import Consolidator
 from nanobot.agent.runner import AgentRunResult
-from nanobot.agent.subagent import SubagentManager
+from nanobot.agent.subagent import SubagentManager, _RequestInputTool, _SubagentTask
+from nanobot.agent.subagent_sessions import SubagentSessions
+from nanobot.agent.subagent_status import SubagentStatus
 from nanobot.agent.tools.base import Tool
 from nanobot.agent.tools.context import RequestContext, current_request_context, request_context
 from nanobot.agent.tools.registry import ToolRegistry, is_tool_error_result
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.subagent import SubagentTool
 from nanobot.bus.events import InboundMessage
+from nanobot.bus.outbound_events import TransientCommandReplyEvent
 from nanobot.bus.queue import MessageBus
 from nanobot.bus.runtime_events import TurnRunStatusChanged
+from nanobot.command.router import CommandContext
+from nanobot.command.task import cmd_task
 from nanobot.config import Config
 from nanobot.nanobot import Nanobot
 from nanobot.providers.base import GenerationSettings, LLMProvider, LLMResponse, ToolCallRequest
-from nanobot.session.manager import SESSION_CACHE_MAX_SIZE, SessionManager
+from nanobot.session.manager import SESSION_CACHE_MAX_SIZE, Session, SessionManager
 from nanobot.session.webui_turns import WebuiTurnRoutePolicy
 from nanobot.utils.llm_runtime import LLMRuntime
 
@@ -59,6 +67,62 @@ async def control(manager, ctx, task_id, action=None, message=None):
 async def settled(manager):
     await asyncio.gather(*list(manager._running_tasks.values()), return_exceptions=True)
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_native_input_request_resumes_through_task_send(tmp_path):
+    manager, _, _ = setup(tmp_path)
+    manager.sessions = MagicMock(spec=SubagentSessions)
+    manager.sessions.exists.return_value = True
+    manager.sessions.contains.return_value = True
+    manager.sessions.load.return_value = {}
+    manager.sessions.save = AsyncMock(return_value=True)
+    notices = asyncio.Queue()
+
+    async def send_notice(packet):
+        notices.put_nowait(packet)
+        return "question-message"
+
+    manager.send_task_notice = AsyncMock(side_effect=send_notice)
+    task_id = str(uuid.uuid4())
+    status = SubagentStatus(
+        task_id, "Release check", "Check the release", time.monotonic(),
+        owner="slack:c", state="running", origin_generation="parent-generation",
+    )
+    record = _SubagentTask(
+        status, Session(f"subagent:{task_id}"), None, {"channel": "slack", "chat_id": "c"},
+    )
+    manager._tasks[task_id] = record
+    tool = _RequestInputTool(partial(manager._request_native_input, record))
+    question = "Which release should I verify?"
+    waiting = asyncio.create_task(tool.execute(question=question))
+    try:
+        notice = await asyncio.wait_for(notices.get(), timeout=5)
+        assert (notice.channel, notice.chat_id) == ("slack", "c")
+        assert notice.metadata["_session_generation"] == "parent-generation"
+        assert question in notice.content
+        assert f"/task {status.reference} send" in notice.content
+        assert manager.check(task_id, status.owner).state == "waiting_input"
+
+        args = f"{status.reference} send Verify the release candidate"
+        msg = InboundMessage(channel="slack", sender_id="user", chat_id="c", content=f"/task {args}")
+        reply = await cmd_task(CommandContext(
+            msg=msg, session=None, key=msg.session_key, raw=msg.content, args=args,
+            loop=SimpleNamespace(subagents=manager), is_user_turn=True,
+        ))
+        assert isinstance(reply.event, TransientCommandReplyEvent)
+        assert "引导回执" in reply.content
+        assert await asyncio.wait_for(waiting, timeout=5) == "Input received. Read the user's follow-up before continuing."
+        assert status.state == "running" and status.question is None
+        assert await manager._drain_inbox(record) == [{"role": "user", "content": "Verify the release candidate"}]
+        assert list(status.receipts.values()) == ["delivered"]
+        assert status.parent_receipts() == {}
+        assert manager.bus.inbound_size == 0
+        manager.send_task_notice.assert_awaited_once()
+    finally:
+        if not waiting.done():
+            waiting.cancel()
+            await asyncio.gather(waiting, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -278,11 +342,12 @@ async def test_default_loop_keeps_slack_thread_for_late_subagent_result(
 
 
 @pytest.mark.asyncio
-async def test_waiting_parent_gets_verified_milestones_before_native_child_finishes(loop_factory, monkeypatch):
+async def test_native_progress_stays_in_task_status_while_parent_waits(loop_factory, monkeypatch):
     loop = loop_factory()
     loop.provider.provider_name = "test"
     monkeypatch.setattr("nanobot.agent.loop._SUBAGENT_TERMINAL_WAIT_SECONDS", 5)
     parent_waiting = asyncio.Event()
+    child_reported = asyncio.Event()
     release_child = asyncio.Event()
     parent_calls = 0
     should_wait = loop.subagents.should_wait_for_results
@@ -295,11 +360,6 @@ async def test_waiting_parent_gets_verified_milestones_before_native_child_finis
             parent_waiting.set()
         return waiting
 
-    def report(key, summary):
-        return ToolCallRequest(
-            id=key, name="report_progress", arguments={"milestone": key, "summary": summary},
-        )
-
     async def respond(**kwargs):
         nonlocal parent_calls
         messages = kwargs["messages"]
@@ -309,7 +369,13 @@ async def test_waiting_parent_gets_verified_milestones_before_native_child_finis
             assert "report_progress" in tools
             await parent_waiting.wait()
             if not any(m["role"] == "tool" for m in messages):
-                return LLMResponse(content=None, tool_calls=[report("published", version), report("backfilled", backfill)])
+                return LLMResponse(content=None, tool_calls=[
+                    ToolCallRequest(id="published", name="report_progress", arguments={"summary": version}),
+                    ToolCallRequest(id="backfilled", name="report_progress", arguments={
+                        "milestone": "backfill", "summary": backfill,
+                    }),
+                ])
+            child_reported.set()
             await release_child.wait()
             return LLMResponse(content="Child terminal result")
 
@@ -320,9 +386,9 @@ async def test_waiting_parent_gets_verified_milestones_before_native_child_finis
                 id="delegate", name="subagent",
                 arguments={"action": "create", "task": "Publish and backfill", "wait": False},
             )])
-        if version in transcript and backfill in transcript:
-            assert "Child terminal result" not in transcript
-            return LLMResponse(content="Version 1 is online and backfill 3292731 was submitted.")
+        assert version not in transcript and backfill not in transcript
+        if "Child terminal result" in transcript:
+            return LLMResponse(content="The task is complete.")
         return LLMResponse(content="Deployment is pending.")
 
     async def next_reply():
@@ -337,11 +403,13 @@ async def test_waiting_parent_gets_verified_milestones_before_native_child_finis
     message = InboundMessage(channel="slack", sender_id="user", chat_id="c", content="Check release")
     try:
         await loop.bus.publish_inbound(message)
-        reply = await asyncio.wait_for(next_reply(), timeout=20)
+        await asyncio.wait_for(child_reported.wait(), timeout=5)
         status, = loop.subagents.statuses_for_session(message.session_key).values()
         assert status.state == "running"
-        assert status.progress == backfill
-        assert reply.content == "Version 1 is online and backfill 3292731 was submitted."
+        assert [entry.summary for entry in status.recent_progress] == [version, backfill]
+        release_child.set()
+        reply = await asyncio.wait_for(next_reply(), timeout=5)
+        assert reply.content == "The task is complete."
     finally:
         release_child.set()
         loop.stop()

@@ -144,7 +144,8 @@ class SubagentSessions:
     async def interrupt_pending(self) -> None:
         """Seal abandoned work after the gateway acquires execution ownership."""
         for status in await asyncio.to_thread(self.load_all):
-            if status.state not in _ACTIVE_STATES:
+            native_waiting = status.backend == "native" and status.state == "waiting_input"
+            if status.state not in _ACTIVE_STATES and not native_waiting:
                 continue
             try:
                 status.state = status.phase = "interrupted"
@@ -157,6 +158,8 @@ class SubagentSessions:
                 status.receipts = {key: "undelivered" if receipt == "accepted" else receipt
                                    for key, receipt in status.receipts.items()}
                 status.pending_inputs.clear()
+                if native_waiting:
+                    status.question_id = status.question = None
                 await self.save(status)
             except OSError:
                 logger.exception("Could not recover subagent session {}", self.key(status.task_id))

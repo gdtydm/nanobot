@@ -53,7 +53,7 @@ def _one_line(text: str, limit: int) -> str:
 
 
 def _backend_name(status: SubagentStatus) -> str:
-    return "Codex" if status.backend == "codex" else "原生"
+    return "Codex" if status.backend == "codex" else "Subagent"
 
 
 def _task_label(status: SubagentStatus) -> str:

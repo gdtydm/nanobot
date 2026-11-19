@@ -169,7 +169,7 @@ class SubagentTool(Tool):
         if not inline:
             method = partial(
                 method, origin_route=notification_metadata(origin_channel, request_ctx.metadata),
-                sender_id=request_ctx.sender_id,
+                origin_generation=request_ctx.session_generation, sender_id=request_ctx.sender_id,
             )
         return await method(
             task=task,

@@ -49,6 +49,8 @@ Task command replies are marked as subagent interactions. The gateway reads the 
 
 The Codex acceptance notice and the active task list put the complete `/task <id>` command in its own code block for copying.
 
+Native subtasks record brief milestone updates for `/task`. When a native background task needs a user decision, it sends the question to the originating conversation and waits for `/task <id> send <answer>`. An in-flight native task waiting for input is interrupted if the gateway restarts.
+
 Use a follow-up to adjust the current assignment, such as changing the date range. The task keeps its other deliverables and acceptance criteria unless you explicitly replace the assignment.
 
 ## Pairing
