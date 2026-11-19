@@ -60,7 +60,7 @@ from nanobot.bus.outbound_events import (
 from nanobot.bus.queue import MessageBus
 from nanobot.command import CommandContext, CommandRouter
 from nanobot.command.builtin import register_core_commands
-from nanobot.command.router import CommandExpansion, command_text
+from nanobot.command.router import CommandExpansion, command_text, normalize_command_text
 from nanobot.config.network import NetworkConfig
 from nanobot.config.schema import AgentDefaults, ModelPresetConfig
 from nanobot.cron.session_turns import is_cron_turn
@@ -894,6 +894,20 @@ class AgentLoop:
             return
         await dispatch_and_publish()
 
+    async def _dispatch_transient_command(self, msg: InboundMessage, session_key: str) -> OutboundMessage:
+        raw = " ".join(normalize_command_text(command_text(msg)).split(maxsplit=1))
+        _, automation_metadata = automation_history_overrides(msg.metadata)
+        ctx = CommandContext(
+            msg=msg, session=None, key=session_key, raw=raw, loop=self,
+            is_user_turn=(
+                msg.is_user_input and msg.channel != "system" and msg.sender_id != "subagent"
+                and not automation_metadata and not turn_continuation.internal_continuation_inbound(msg.metadata)
+            ),
+        )
+        result = await self.commands.dispatch(ctx)
+        assert isinstance(result, OutboundMessage)
+        return result
+
     def _track_active_task(self, key: str, task: asyncio.Task[Any]) -> None:
         tasks = self._active_tasks.setdefault(key, set())
         tasks.add(task)
@@ -1466,6 +1480,9 @@ class AgentLoop:
             msg.require_existing_session
             and await self.sessions.state.read_metadata(key) is None
         ):
+            return
+        if msg.is_user_input and msg.channel != "system" and self.commands.is_transient(raw):
+            await self.bus.publish_outbound(await self._dispatch_transient_command(msg, key))
             return
         if msg.is_user_input:
             await self.runtime_event_publisher.user_input_accepted(msg, key)
@@ -2654,8 +2671,10 @@ class AgentLoop:
             content=content, media=media or [],
         )
         # Share the dispatch lock so direct calls serialize with bus turns.
-        lock = self._get_session_lock(session_key)
         with self.bus.admission.activity():
+            if self.commands.is_transient(command_text(msg)):
+                return await self._dispatch_transient_command(msg, session_key)
+            lock = self._get_session_lock(session_key)
             temporary_parent = False
             delivery: TurnDelivery | None = None
             try:

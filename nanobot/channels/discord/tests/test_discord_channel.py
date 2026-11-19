@@ -1180,7 +1180,7 @@ async def test_slash_new_is_blocked_for_disallowed_user() -> None:
     assert handled == []
 
 
-@pytest.mark.parametrize("slash_name", ["stop", "restart", "status", "history", "model"])
+@pytest.mark.parametrize("slash_name", ["stop", "restart", "status", "history", "model", "task"])
 @pytest.mark.asyncio
 async def test_slash_commands_forward_via_handle_message(slash_name: str) -> None:
     channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
@@ -1207,7 +1207,11 @@ async def test_slash_commands_forward_via_handle_message(slash_name: str) -> Non
 
 
 @pytest.mark.asyncio
-async def test_slash_model_forwards_optional_preset() -> None:
+@pytest.mark.parametrize(("name", "arguments", "expected"), [
+    ("model", {"preset": "fast"}, "/model fast"),
+    ("task", {"args": "abcdef12 send Use January"}, "/task abcdef12 send Use January"),
+])
+async def test_slash_command_forwards_optional_arguments(name, arguments, expected) -> None:
     channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
     handled: list[dict] = []
 
@@ -1217,17 +1221,17 @@ async def test_slash_model_forwards_optional_preset() -> None:
     channel._handle_message = capture_handle  # type: ignore[method-assign]
     client = DiscordBotClient(channel, intents=discord.Intents.none())
     interaction = _make_interaction()
-    interaction.command.qualified_name = "model"
+    interaction.command.qualified_name = name
 
-    model_cmd = client.tree.get_command("model")
-    assert model_cmd is not None
-    await model_cmd.callback(interaction, preset="fast")
+    cmd = client.tree.get_command(name)
+    assert cmd is not None
+    await cmd.callback(interaction, **arguments)
 
     assert interaction.response.messages == [
-        {"content": "Processing /model fast...", "ephemeral": True}
+        {"content": f"Processing {expected}...", "ephemeral": True}
     ]
     assert len(handled) == 1
-    assert handled[0]["content"] == "/model fast"
+    assert handled[0]["content"] == expected
     assert handled[0]["metadata"]["is_slash_command"] is True
 
 

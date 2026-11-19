@@ -15,6 +15,7 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.command.router import CommandContext, CommandExpansion, CommandInput, CommandRouter
 from nanobot.command.spec import BuiltinCommandSpec
 from nanobot.command.spec import CommandLifecycle as CommandLifecycle
+from nanobot.command.task import register_task_command
 from nanobot.command.user_shell import cmd_user_shell
 from nanobot.providers.base import LLMUsage
 from nanobot.utils.cancellation import shield_and_drain
@@ -956,6 +957,7 @@ def register_core_commands(router: CommandRouter) -> None:
     router.exact("/new", cmd_new)
     router.exact("/compact", cmd_compact, session_queue=True)
     router.exact("/status", cmd_status)
+    register_task_command(router)
     router.exact("/model", cmd_model)
     router.prefix("/model ", cmd_model)
     router.input_command("/codex", cmd_codex)

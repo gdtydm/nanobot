@@ -83,6 +83,7 @@ from nanobot.session.manager import Session, SessionManager, SessionPolicy
 from nanobot.utils.cancellation import shield_and_drain
 from nanobot.utils.llm_runtime import LLMRuntime
 from nanobot.utils.prompt_templates import render_template
+from nanobot.utils.subagent_channel_display import task_display_text, task_query_block
 
 if TYPE_CHECKING:
     from nanobot.agent.memory import Consolidator
@@ -266,16 +267,20 @@ class _ReportProgressTool(Tool):
         required=["milestone", "summary"],
         milestone=StringSchema("Stable key for this milestone, used to deduplicate retries.", min_length=1, max_length=120),
         summary=StringSchema("Brief factual update with evidence IDs and any remaining work.", min_length=1, max_length=800),
+        detail=StringSchema("Optional detail shown in the task's on-demand log.", max_length=500),
+        next_step=StringSchema("Optional next step shown in the task's on-demand status.", max_length=200),
     )
 
-    def __init__(self, report: Callable[[str, str], Awaitable[str]]) -> None:
+    def __init__(self, report: Callable[[str, str, str, str], Awaitable[str]]) -> None:
         self._report = report
 
-    async def execute(self, milestone: str, summary: str, **kwargs: Any) -> str:
+    async def execute(
+        self, milestone: str, summary: str, detail: str = "", next_step: str = "", **kwargs: Any,
+    ) -> str:
         milestone, summary = milestone.strip(), summary.strip()
         if not milestone or not summary:
             return ToolResult.error("A milestone and summary are required.")
-        return await self._report(milestone, summary)
+        return await self._report(milestone, summary, detail.strip(), next_step.strip())
 
 
 class SubagentManager:
@@ -498,11 +503,14 @@ class SubagentManager:
     async def send(
         self, task_id: str, owner: str | None, message: str | None, *,
         sender_id: str | None = None, input_id: str | None = None, question_id: str | None = None,
+        private_receipt: bool = False,
     ) -> SubagentMessageReceipt:
         """Accept a bounded follow-up only while execution is open."""
         status = self._owned_status(task_id, owner)
         if status.backend == "codex":
-            return await self._send_codex(status, message, sender_id, input_id, question_id)
+            return await self._send_codex(
+                status, message, sender_id, input_id, question_id, private_receipt=private_receipt,
+            )
         if status.state not in {"queued", "running"}:
             raise SubagentControlError("task is not accepting messages")
         if not message or not message.strip() or len(message.encode("utf-8")) > self.MAX_MESSAGE_BYTES:
@@ -513,6 +521,8 @@ class SubagentManager:
         message_id = str(uuid.uuid4())
         record.inbox.append((message_id, message))
         status.receipts[message_id] = "accepted"
+        if private_receipt:
+            status.private_receipts.add(message_id)
         await self._save_status(status)
         return {"task_id": task_id, "message_id": message_id,
                 "receipt": "accepted", "delivered": False}
@@ -601,15 +611,17 @@ class SubagentManager:
     async def find_tasks(
         self, owner: str, query: str | None = None, *, sender_id: str | None = None,
         backend: SubagentBackend | None = None,
+        active_only: bool = False,
     ) -> list[SubagentStatus]:
         tasks = [
             status for status in (await self.read_statuses_for_session(owner)).values()
             if (backend is None or status.backend == backend)
             and (status.backend == "native" or sender_id is None or status.origin_sender_id in (None, sender_id))
+            and (not active_only or status.state in {"queued", "running", "waiting_input", "stopping"})
         ]
         tasks.sort(key=lambda status: (status.finished_at is None, status.created_at), reverse=True)
         if not query:
-            return tasks[:20]
+            return tasks if active_only else tasks[:20]
         needle = query.casefold().strip().lstrip("#")
         exact = [status for status in tasks if needle in {status.reference.casefold(), status.task_id.casefold()}]
         return exact or [
@@ -965,7 +977,7 @@ class SubagentManager:
 
     async def _send_codex(
         self, status: SubagentStatus, message: str | None, sender_id: str | None,
-        input_id: str | None, question_id: str | None,
+        input_id: str | None, question_id: str | None, *, private_receipt: bool,
     ) -> SubagentMessageReceipt:
         self._check_codex_sender(status, sender_id)
         key = input_id or str(uuid.uuid4())
@@ -1000,6 +1012,8 @@ class SubagentManager:
                 raise SubagentControlError("Codex tasks are disabled")
             status.pending_inputs.append((key, message.strip()))
             status.receipts[key] = "accepted"
+            if private_receipt:
+                status.private_receipts.add(key)
             if answers_question:
                 status.state = status.phase = "queued"
             await self._save_status(status)
@@ -1029,14 +1043,21 @@ class SubagentManager:
             return
         if self.sessions is None or not self.sessions.contains(status.task_id, status.owner):
             return
-        content = f"Codex · {status.label} · {status.reference}\n{text}"
+        if kind == "receipt":
+            content = (
+                f"✅ Codex · {task_display_text(status.label)} · {text}\n\n"
+                f"{task_query_block(status.reference)}"
+            )
+        else:
+            content = f"Codex · {status.label} · {status.reference}\n{text}"
         try:
             async with asyncio.timeout(12):
                 message_id = await self.send_task_notice(OutboundMessage(
                     channel=record.origin["channel"], chat_id=record.origin["chat_id"], content=content,
                     metadata={**status.origin_route, "message_id": status.origin_message_id,
                               "_session_key": status.owner, "_session_generation": status.origin_generation,
-                              "render_as": "text", "task_notice_id": f"{status.task_id}:{kind}"},
+                              **({"render_as": "text"} if kind != "receipt" else {}),
+                              "task_notice_id": f"{status.task_id}:{kind}"},
                 ))
         except Exception as exc:
             logger.warning("Codex task notice {} could not be delivered: {}", kind, type(exc).__name__)
@@ -1235,7 +1256,7 @@ class SubagentManager:
             record.raise_if_stopping()
             if status.backend == "codex" and status.codex_turn is None and "receipt" not in status.notice_ids:
                 try:
-                    await self._codex_notice(record, "receipt", "Accepted by Codex · Queued")
+                    await self._codex_notice(record, "receipt", "Accepted by Codex")
                 finally:
                     record.receipt_attempted.set()
             async with self._run_slots:
@@ -1306,7 +1327,7 @@ class SubagentManager:
             await self._announce_result(
                 status.task_id, label, task_text, outcome.result, record.origin,
                 "ok" if outcome.state == "done" else outcome.state, record.origin_message_id,
-                receipts=dict(status.receipts),
+                receipts=status.parent_receipts(),
                 stop_reason=status.stop_reason, error=status.error, partial_result=status.partial,
                 project_status=status if status.project is not None else None,
                 reply_first=status.reply_first,
@@ -1337,13 +1358,16 @@ class SubagentManager:
                     record.raise_if_stopping()
                     inputs = list(status.pending_inputs)
                     task_text = status.task_description
-                    if status.question is not None and resuming:
-                        task_text = f"Continue the same task. The user's answer to your question {status.question!r} follows."
-                    elif resuming:
-                        task_text = f"Continue the same task. Apply the following instructions.\n\n{task_text}"
+                    if resuming:
+                        task_text = f"Continue the same task.\n\n{task_text}"
+                        if status.question is not None:
+                            task_text += f"\n\nThe user's answer to your question {status.question!r} follows."
                     if inputs:
                         task_text += "\n\nUser follow-up:\n" + "\n".join(message for _, message in inputs)
                     task_text += (
+                        "\n\nTreat user follow-ups as changes to the assigned task. Apply the requested changes and "
+                        "continue with the remaining deliverables and acceptance criteria. Stop or replace the "
+                        "assignment if the user explicitly requests it, within the task's permissions."
                         "\n\nReturn a structured result with state, summary and question. "
                         "Use needs_input and ask one concrete question if a user decision blocks the task. "
                         "Use done only after checking the requested deliverables. "
@@ -1383,9 +1407,11 @@ class SubagentManager:
         kind = item.get("type")
         if kind == "agentMessage" and method == "item/completed" and item.get("phase") == "commentary":
             if isinstance(text := item.get("text"), str) and text.strip():
-                status.progress = f"Codex reported: {text.strip()[:800]}"
-                status.progress_at = time.time()
-                await self._save_status(status)
+                summary = text.strip()[:800]
+                item_id = item.get("id")
+                key = f"{status.codex_turn}:{item_id}" if isinstance(item_id, str) and item_id else summary
+                if status.record_progress(key, f"Codex reported: {summary}"):
+                    await self._save_status(status)
             return
         if kind not in {"commandExecution", "fileChange", "mcpToolCall", "webSearch"}:
             return
@@ -1405,13 +1431,15 @@ class SubagentManager:
             status.progress, status.progress_at = progress, time.time()
             await self._save_status(status)
 
-    async def _report_progress(self, record: _SubagentTask, milestone: str, summary: str) -> str:
+    async def _report_progress(
+        self, record: _SubagentTask, milestone: str, summary: str, detail: str = "", next_step: str = "",
+    ) -> str:
         record.raise_if_stopping()
         if milestone in record.reported_milestones:
             return "Milestone already recorded."
         record.reported_milestones.add(milestone)
         status = record.status
-        status.progress, status.progress_at = summary, time.time()
+        status.record_progress(milestone, summary, detail=detail, next_step=next_step)
         await self._save_status(status)
         record.raise_if_stopping()
         if record.announce:

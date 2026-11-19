@@ -19,6 +19,7 @@ from nanobot.bus.outbound_events import (
     RetryWaitEvent,
     RuntimeModelUpdatedEvent,
     SessionUpdatedEvent,
+    TransientCommandReplyEvent,
     TurnEndEvent,
     TurnModelUpdatedEvent,
     UserInputEvent,
@@ -444,12 +445,14 @@ class WebUIOutboundDelivery:
 
     async def _message_payload(self, msg: OutboundMessage, progress: ProgressEvent | None) -> dict[str, Any]:
         text = msg.content
-        user_shell = msg.metadata.get(INBOUND_META_USER_SHELL) is True
+        keep_text = (
+            msg.metadata.get(INBOUND_META_USER_SHELL) is True or isinstance(msg.event, TransientCommandReplyEvent)
+        )
         payload: MessageWirePayload = {
             "event": "message", "chat_id": msg.chat_id,
-            "text": text if user_shell else self._media.rewrite_local_markdown_images(text),
+            "text": text if keep_text else self._media.rewrite_local_markdown_images(text),
         }
-        if user_shell:
+        if msg.metadata.get(INBOUND_META_USER_SHELL) is True:
             payload["render_as"] = "text"
         turn_id = msg.metadata.get(WEBUI_TURN_METADATA_KEY)
         if isinstance(turn_id, str) and turn_id:
@@ -484,11 +487,12 @@ class WebUIOutboundDelivery:
     async def _send_message(self, msg: OutboundMessage, progress: ProgressEvent | None) -> None:
         recipients = self._transport.webui_recipients(ChatAudience(msg.chat_id))
         body = await self._message_payload(msg, progress)
-        await self._persist_turn_transcript_event(
-            msg.chat_id, body, metadata=msg.metadata,
-            phase="activity" if progress else "answer", include_source=True,
-            transcript_overrides={"text": msg.content},
-        )
+        if not isinstance(msg.event, TransientCommandReplyEvent):
+            await self._persist_turn_transcript_event(
+                msg.chat_id, body, metadata=msg.metadata,
+                phase="activity" if progress else "answer", include_source=True,
+                transcript_overrides={"text": msg.content},
+            )
         await self._fanout(recipients, body, label=" ")
 
     async def send_reasoning_delta(

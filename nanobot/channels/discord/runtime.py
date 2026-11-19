@@ -220,6 +220,15 @@ if DISCORD_AVAILABLE:
                 command_text = f"/model {preset}" if preset else "/model"
                 await self._forward_slash_command(interaction, command_text)
 
+            @self.tree.command(name="task", description="Check or steer a delegated task")
+            @app_commands.describe(args="Task ID, or [task ID] send <instruction>")
+            async def task_command(
+                interaction: discord.Interaction,
+                args: str | None = None,
+            ) -> None:
+                args = (args or "").strip()
+                await self._forward_slash_command(interaction, f"/task {args}" if args else "/task")
+
             @self.tree.command(name="trigger", description="Create a named local trigger for this chat")
             @app_commands.describe(name="Trigger name")
             async def trigger_command(

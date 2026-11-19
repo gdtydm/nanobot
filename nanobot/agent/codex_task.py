@@ -150,7 +150,7 @@ class CodexTurn:
                     else:
                         if not isinstance(item := params.get("item"), dict):
                             continue
-                        observed["item"] = {key: item.get(key) for key in ("type", "phase", "exitCode", "status")}
+                        observed["item"] = {key: item.get(key) for key in ("id", "type", "phase", "exitCode", "status")}
                         if item.get("type") == "agentMessage" and isinstance(item.get("text"), str):
                             observed["item"]["text"] = item["text"][:64_000]
                     self._events.put_nowait({"method": method, "params": observed})

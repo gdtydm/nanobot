@@ -2534,6 +2534,8 @@ def test_telegram_bus_slash_command_regex_matches_agent_loop_commands() -> None:
     pat = TelegramChannel.TELEGRAM_BUS_SLASH_COMMAND_RE
     assert pat.fullmatch("/history")
     assert pat.fullmatch("/history 5")
+    assert pat.fullmatch("/task")
+    assert pat.fullmatch("/task@nanobot_bot abcdef12 send Use January")
     assert pat.fullmatch("/goal ship the feature")
     assert pat.fullmatch("/trigger")
     assert pat.fullmatch("/trigger PR review")

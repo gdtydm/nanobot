@@ -27,6 +27,7 @@ class BuiltinCommandSpec:
     arg_hint: str = ""
     lifecycle: CommandLifecycle = "side_channel"
     accepts_args: bool = False
+    transient: bool = False
 
     def as_dict(self) -> dict[str, str | bool]:
         return {

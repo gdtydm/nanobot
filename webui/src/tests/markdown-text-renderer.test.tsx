@@ -285,6 +285,25 @@ describe("MarkdownTextRenderer", () => {
     expect(container.querySelectorAll("pre")).toHaveLength(1);
   });
 
+  it("copies only the complete task query command from a Codex acceptance notice", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      render(
+        <MarkdownTextRenderer highlightCode={false}>
+          {"✅ Codex · RT-THRESHOLD-STABILITY｜实时预测阈值跨日实测 · Accepted by Codex\n\n```text\n/task a1b6b04a\n```"}
+        </MarkdownTextRenderer>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+      await waitFor(() => expect(writeText.mock.calls).toEqual([["/task a1b6b04a"]]));
+    } finally {
+      if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
 
   it("renders markdown images as inline previews", () => {
     render(<MarkdownTextRenderer>![Diagram](/api/media/sig/payload)</MarkdownTextRenderer>);

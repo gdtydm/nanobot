@@ -9,6 +9,9 @@ These commands work inside chat channels and interactive agent sessions:
 | `/stop` | Stop the current task |
 | `/restart` | Restart the bot |
 | `/status` | Show bot status |
+| `/task` | List active delegated tasks in this conversation |
+| `/task <id>` | Show a task's current phase, up to three progress reports, and its latest message receipt |
+| `/task <id> send <instruction>` | Send a follow-up directly to that task |
 | `/model` | Show the current model and available model presets |
 | `/model <preset>` | Switch and persist the model preset for the current session |
 | `/dream` | Run Dream memory consolidation now |
@@ -37,6 +40,16 @@ Other text goes to the agent unchanged. This includes `/tmp`, `/home/user/projec
 In the WebUI, Enter queues ordinary text while a response is running. Paths follow the same rule. Registered commands still go to the gateway immediately. If the command list is unavailable, slash-prefixed input goes to the gateway immediately, so commands such as `/stop` do not wait in the queue.
 
 A path can have the same name as a command. For example, `/new` starts a new conversation. To discuss that directory, write `/new/` or `Look at /new`. Chat platforms can apply their own command rules before a message reaches the gateway.
+
+## Delegated tasks
+
+Use the short ID from `/task` to inspect or steer a native or Codex task. `/task send <instruction>` selects the task when exactly one task in the conversation is active. When several tasks are active, specify the target with `/task <id> send <instruction>`. An accepted instruction is queued. Check its receipt with `/task <id>` to see when it was delivered to the worker. For native tasks, delivery happens between model calls. Answer a pending Codex question using its question reply flow.
+
+Task command replies are marked as subagent interactions. The gateway reads the task's saved reports and runtime phase directly, without calling a model or adding the command and its reply to the main agent's conversation history. Existing task notifications continue to arrive automatically.
+
+The Codex acceptance notice and the active task list put the complete `/task <id>` command in its own code block for copying.
+
+Use a follow-up to adjust the current assignment, such as changing the date range. The task keeps its other deliverables and acceptance criteria unless you explicitly replace the assignment.
 
 ## Pairing
 

@@ -16,7 +16,10 @@ from websockets.asyncio.server import ServerConnection
 from nanobot.bus.events import INBOUND_META_LOCAL_MEDIA, INBOUND_META_USER_SHELL
 from nanobot.channels.websocket.attachment_policy import validate_attachment_batch
 from nanobot.channels.websocket.attachment_store import AttachmentUploadError
-from nanobot.command.application import builtin_command_starts_agent_turn
+from nanobot.command.application import (
+    builtin_command_is_transient,
+    builtin_command_starts_agent_turn,
+)
 from nanobot.command.builtin import USER_SHELL_COMMAND
 from nanobot.runtime_context import (
     RUNTIME_CONTEXT_INPUT_META,
@@ -701,6 +704,7 @@ class WebUICommandRouter:
         )
         if is_user_shell:
             metadata[INBOUND_META_USER_SHELL] = True
+        transient_command = not is_user_shell and builtin_command_is_transient(content)
         dispatch_content = (
             f"{USER_SHELL_COMMAND} {content[1:].lstrip()}" if is_user_shell else content
         )
@@ -757,7 +761,7 @@ class WebUICommandRouter:
             self._temporary_chats.register_media(connection, chat_id, [str(item.path) for item in uploaded])
         is_webui = metadata.get("webui") is True
         queued_owner = None
-        if is_webui and not is_user_shell and builtin_command_starts_agent_turn(content):
+        if is_webui and not transient_command and not is_user_shell and builtin_command_starts_agent_turn(content):
             queued_owner = register_queued_websocket_turn_if_idle(chat_id, turn_id)
             if queued_owner is not None:
                 metadata[WEBSOCKET_TURN_OWNER_METADATA_KEY] = queued_owner
@@ -766,7 +770,7 @@ class WebUICommandRouter:
         session_generation: str | None = None
         session_created = False
         try:
-            if not restart_control:
+            if not restart_control and not transient_command:
                 admission = await self.workspace_scope_or_error(
                     connection,
                     lambda: self._workspaces.persist_scope(
@@ -786,7 +790,7 @@ class WebUICommandRouter:
                 session_generation, session_created = admission
             if session_generation is not None:
                 metadata[HISTORY_GENERATION_METADATA_KEY] = session_generation
-            if is_webui and not restart_control and temporary_policy is None:
+            if is_webui and not restart_control and not transient_command and temporary_policy is None:
                 await self._transcripts.append_user_message(
                     chat_id,
                     content,
@@ -846,7 +850,7 @@ class WebUICommandRouter:
         for attachment, name in zip(media, media_names, strict=False):
             if name:
                 attachment["name"] = name
-        if is_webui and not restart_control:
+        if is_webui and not restart_control and not transient_command:
             if session_created:
                 await self._outbound.session_updated(chat_id, scope="metadata")
             await self.broadcast_user_message(

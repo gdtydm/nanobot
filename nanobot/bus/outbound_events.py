@@ -21,6 +21,11 @@ from nanobot.providers.base import LLMUsage
 
 
 @dataclass(frozen=True)
+class TransientCommandReplyEvent(AgentEvent):
+    """Display a control reply without adding it to a conversation transcript."""
+
+
+@dataclass(frozen=True)
 class ProgressEvent(AgentEvent):
     content: str = ""
     tool_hint: bool = False

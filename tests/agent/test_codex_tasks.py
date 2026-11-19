@@ -75,9 +75,14 @@ for line in sys.stdin:
         }
         text = params["input"][0]["text"]
         turn = "resume" if "Continue the same task" in text else "initial"
+        if "with commentary" in text:
+            assert "continue with the remaining deliverables and acceptance criteria" in text
         result = {"turn": {"id": turn}}
     elif method == "turn/steer":
         assert params["threadId"] == thread and params["expectedTurnId"] == turn
+        if "with commentary" in text:
+            assert "second" in text
+            assert params["input"] == [{"type": "text", "text": "Use the new cutoff"}]
         result = {"turnId": turn}
     else:
         result = {}
@@ -91,6 +96,21 @@ for line in sys.stdin:
         else:
             emit({"method": "item/started", "params": {"threadId": thread, "turnId": turn,
                   "item": {"type": "commandExecution"}}})
+            if "with commentary" in text:
+                for n in (1, 2, 3, 4, 4):
+                    emit({"method": "item/completed", "params": {
+                        "threadId": thread, "turnId": turn, "item": {
+                            "type": "agentMessage", "phase": "commentary",
+                            "id": f"report-{n}", "text": f"Commentary stage {n}",
+                        },
+                    }})
+    if method == "turn/steer" and "with commentary" in text:
+        emit({"method": "item/completed", "params": {
+            "threadId": thread, "turnId": turn, "item": {
+                "type": "agentMessage", "phase": "commentary",
+                "id": "steer-applied", "text": "Applied the new cutoff and continued the comparison",
+            },
+        }})
     if method == "turn/interrupt":
         emit({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "interrupted"}}})
 """)
@@ -99,7 +119,9 @@ for line in sys.stdin:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("channel", "chat_id"), [("websocket", "beacon-web"), ("telegram", "-100"), ("feishu", "ou_user")])
+@pytest.mark.parametrize(("channel", "chat_id"), [
+    ("websocket", "beacon-web"), ("telegram", "-100"), ("feishu", "ou_user"), ("weixin", "beacon-wx"),
+])
 async def test_codex_waiting_task_resumes_same_thread_after_restart(tmp_path, codex_project, channel, chat_id):
     repo, executable = codex_project
     owner = f"{channel}:{chat_id}"
@@ -141,7 +163,12 @@ async def test_codex_waiting_task_resumes_same_thread_after_restart(tmp_path, co
         task_id = result["task_id"]
         receipt = await asyncio.wait_for(notices.get(), 5)
         question = await asyncio.wait_for(notices.get(), 5)
-        assert "Queued" in receipt.content and result["reference"] in receipt.content
+        ref = result["reference"]
+        assert receipt.content == f"✅ Codex · Beacon evaluation · Accepted by Codex\n\n```text\n/task {ref}\n```"
+        if channel == "weixin":
+            from nanobot.channels.weixin.runtime import split_weixin_message
+
+            assert split_weixin_message(receipt.content) == [receipt.content]
         assert "Which date window?" in question.content
         async with asyncio.timeout(5):
             while manager.get_running_count():
@@ -287,7 +314,8 @@ async def test_codex_continues_terminal_task_on_adopted_worktree_branch(tmp_path
                 reopened = json.loads(await CodexTaskTool(manager).execute(**continuation))
                 receipt = await notices.get()
                 finished = await notices.get()
-        assert reopened["reference"] in receipt.content and "Queued" in receipt.content
+        assert "Accepted by Codex" in receipt.content
+        assert f"```text\n/task {reopened['reference']}\n```" in receipt.content
         assert "Evaluated in the original thread" in finished.content
         restored = manager.check(reopened["task_id"], owner)
         assert restored.state == "done" and restored.branch == "review/clean"
@@ -467,3 +495,59 @@ async def test_codex_steer_and_targeted_stop(tmp_path, codex_project):
     finally:
         await manager.close()
         await sessions.state.aclose()
+
+
+async def test_task_command_reads_codex_commentary_and_reports_steer(tmp_path, codex_project):
+    repo, executable = codex_project
+    sessions = SessionManager(repo, sessions_root=tmp_path / "sessions")
+    loop = AgentLoop(
+        workspace=repo, bus=MessageBus(), provider=_DelegationProvider(), session_manager=sessions,
+        tools_config=ToolsConfig(subagent=SubagentToolConfig(
+            codex=CodexTaskConfig(enabled=True, executable=str(executable)),
+        )),
+    )
+    owner = "weixin:beacon"
+    await sessions.state.get(owner)
+    try:
+        task_ids = []
+        for message_id in ("first", "second"):
+            result, _ = await loop.subagents.spawn_codex(
+                f"keep running with commentary {message_id}",
+                label="RT-THRESHOLD-STABILITY｜实时预测阈值跨日实测", project=None, worktree=None,
+                request=RequestContext(
+                    "weixin", "beacon", session_key=owner, sender_id="owner", message_id=message_id,
+                ),
+            )
+            task_ids.append(json.loads(result)["task_id"])
+        other_id, task_id = task_ids
+        async with asyncio.timeout(5):
+            while not (loop.subagents.check(task_id, owner).progress or "").endswith("stage 4"):
+                await asyncio.sleep(0.01)
+
+        async def command(text, *, sender="owner"):
+            response = await loop.process_direct(
+                text, session_key=owner, channel="weixin", chat_id="beacon", sender_id=sender,
+            )
+            return response.content
+
+        ref = task_id[:8]
+        detail = await command(f"/task {ref}")
+        assert detail.startswith(f"【子任务｜进展】Codex [{ref}] · 实时预测阈值跨日实测\n\n")
+        assert "Codex reported:" not in detail and detail.count("Commentary stage") == 3
+        assert detail.index("Commentary stage 4") < detail.index("Commentary stage 3") < detail.index("Commentary stage 2")
+        assert "找不到" in await command(f"/task {ref}", sender="someone-else")
+        assert "指定目标" in await command("/task send Use the new cutoff")
+        assert not loop.subagents.check(task_id, owner).receipts
+        assert not loop.subagents.check(other_id, owner).receipts
+        assert "用法" in await command(f"/task {ref} send")
+        assert "已送达" in await command(f"/task {ref} send Use the new cutoff")
+        async with asyncio.timeout(5):
+            while not (loop.subagents.check(task_id, owner).progress or "").endswith("continued the comparison"):
+                await asyncio.sleep(0.01)
+        detail = await command(f"/task {ref}")
+        assert "已送达" in detail and "Applied the new cutoff and continued the comparison" in detail
+        assert not loop.subagents.check(other_id, owner).receipts
+        assert not loop.subagents.check(task_id, owner).as_dict()["receipts"]
+        assert not (await sessions.state.read(owner)).messages
+    finally:
+        await loop.aclose()

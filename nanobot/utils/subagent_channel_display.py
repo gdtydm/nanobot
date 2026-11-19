@@ -1,4 +1,4 @@
-"""Strip internal subagent inject scaffolding for human-facing channel surfaces.
+"""Format subagent notices and progress for human-facing channels.
 
 Persisted subagent announcements mirror ``agent/subagent_announce.md``: header,
 full ``Task:`` assignment (model context), ``Result:``, and a trailing model-only
@@ -8,9 +8,22 @@ should show only the header plus a truncated result body.
 
 from __future__ import annotations
 
+import re
+
 # Cap the Result section so session previews stay readable; full text remains on
 # disk for LLM replay.
 _SUBAGENT_CHANNEL_RESULT_MAX_CHARS = 800
+_TASK_MARKDOWN = re.compile(r"([\\`*_{}\[\]<>#~$])")
+
+
+def task_display_text(text: str) -> str:
+    """Keep task text literal alongside the generated Markdown layout."""
+    return _TASK_MARKDOWN.sub(r"\\\1", " ".join(text.split()))
+
+
+def task_query_block(reference: str) -> str:
+    """Give the chat client a single copyable command."""
+    return f"```text\n/task {reference}\n```"
 
 
 def scrub_subagent_announce_body(content: str) -> str:

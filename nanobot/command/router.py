@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Awaitable, Callable
 
@@ -56,6 +57,11 @@ def normalize_command_text(text: str) -> str:
     if command and suffix and _BOT_SUFFIX_RE.fullmatch(suffix):
         return f"{command}{sep}{rest}" if sep else command
     return stripped
+
+
+def is_transient_command(text: str, specs: Sequence[BuiltinCommandSpec]) -> bool:
+    parts = normalize_command_text(text).split(maxsplit=1)
+    return bool(parts and any(spec.transient and spec.command == parts[0].lower() for spec in specs))
 
 
 @dataclass
@@ -122,6 +128,9 @@ class CommandRouter:
 
     def is_priority(self, text: str) -> bool:
         return normalize_command_text(text).lower() in self._priority
+
+    def is_transient(self, text: str) -> bool:
+        return is_transient_command(text, self._specs)
 
     def requires_session_queue(self, text: str) -> bool:
         """Whether an exact command must run on the session worker."""

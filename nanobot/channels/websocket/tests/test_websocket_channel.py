@@ -50,7 +50,7 @@ from nanobot.channels.websocket.runtime import (
 from nanobot.config.loader import load_config, save_config
 from nanobot.config.schema import Config, ModelAPIConfig, ModelPresetConfig
 from nanobot.pairing.events import PairingChanged
-from nanobot.providers.base import LLMUsage
+from nanobot.providers.base import LLMProvider, LLMUsage
 from nanobot.runtime_context import RUNTIME_CONTEXT_INPUT_META, WEBUI_QUOTE_SOURCE
 from nanobot.security.workspace_access import WORKSPACE_SCOPE_METADATA_KEY
 from nanobot.session import webui_turns as wth
@@ -5487,6 +5487,55 @@ async def test_side_channel_command_does_not_register_queued_turn(
         "turn_id": "turn-status",
         "starts_turn": False,
     }
+
+
+async def test_task_command_reply_is_live_only_during_a_webui_turn(history, monkeypatch) -> None:
+    from nanobot.agent.loop import AgentLoop
+    from nanobot.agent.subagent_status import SubagentStatus
+
+    bus = MessageBus()
+    channel = _ch(bus, session_manager=history.sessions)
+    provider = MagicMock(spec=LLMProvider)
+    loop = AgentLoop(bus=bus, provider=provider, workspace=history.sessions.workspace,
+                     session_manager=history.sessions, model="test-model")
+    conn = AsyncMock()
+    conn.remote_address = ("127.0.0.1", 50123)
+    chat_id = "task-control"
+    key = f"websocket:{chat_id}"
+    task = SubagentStatus(task_id="a1b6b04a-test", label="Feature coverage", task_description="Inspect coverage",
+                          started_at=time.monotonic(), state="running")
+    monkeypatch.setattr(loop.subagents, "find_tasks", AsyncMock(return_value=[task]))
+    original = {"event": "user", "chat_id": chat_id, "text": "Investigate feature coverage"}
+    history.append(key, original)
+    await history.sessions.state.get(key)
+    await _register_running_turn(chat_id, time.time(), owner="in-progress")
+    try:
+        await channel._dispatch_envelope(conn, "webui-client", {
+            "type": "message", "chat_id": chat_id, "content": "/task",
+            "webui": True, "turn_id": "task-query",
+        })
+        async with asyncio.timeout(5):
+            await loop._dispatch_inbound(await bus.consume_inbound())
+            await channel.send(await bus.consume_outbound())
+        frames = [json.loads(call.args[0]) for call in conn.send.await_args_list]
+        assert any(
+            frame["event"] == "message_accepted"
+            and frame["turn_id"] == "task-query" and frame["starts_turn"] is False
+            for frame in frames
+        )
+        assert any(
+            frame["event"] == "message" and frame["text"].startswith("【子任务｜活跃任务】")
+            and frame["turn_id"] == "task-query" and "render_as" not in frame
+            and "```text\n/task a1b6b04a\n```" in frame["text"]
+            for frame in frames
+        )
+        assert wth.websocket_turn_owner_is_registered(chat_id, "in-progress", None)
+        assert [event["text"] for event in history.read(key)] == [original["text"]]
+        assert not (await history.sessions.state.get(key)).messages
+        provider.chat_stream_with_retry.assert_not_called()
+    finally:
+        wth.clear_websocket_turns(chat_id)
+        await loop.aclose()
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,15 @@ class SubagentReview:
 
 
 @dataclass(slots=True)
+class TaskProgress:
+    key: str
+    at: float
+    summary: str
+    detail: str = ""
+    next_step: str = ""
+
+
+@dataclass(slots=True)
 class SubagentStatus:
     """Observable task data, detached from execution and process resources."""
 
@@ -39,6 +48,7 @@ class SubagentStatus:
     owner: str = ""
     state: SubagentState = "queued"
     receipts: dict[str, str] = field(default_factory=dict)
+    private_receipts: set[str] = field(default_factory=set)
     result: str | None = None
     partial: bool = False
     iteration: int = 0
@@ -65,6 +75,7 @@ class SubagentStatus:
     review: SubagentReview | None = None
     progress: str | None = None
     progress_at: float | None = None
+    recent_progress: list[TaskProgress] = field(default_factory=list)
     question: str | None = None
     question_id: str | None = None
     model: str | None = None
@@ -84,6 +95,21 @@ class SubagentStatus:
     def reference(self) -> str:
         return self.task_id[:8]
 
+    def record_progress(
+        self, key: str, summary: str, *, detail: str = "", next_step: str = "",
+    ) -> bool:
+        """Store the latest report and a bounded log for task queries."""
+        if any(entry.key == key for entry in self.recent_progress):
+            return False
+        self.progress, self.progress_at = summary, time.time()
+        self.recent_progress = [
+            *self.recent_progress[-2:], TaskProgress(key, self.progress_at, summary, detail, next_step),
+        ]
+        return True
+
+    def parent_receipts(self) -> dict[str, str]:
+        return {key: value for key, value in self.receipts.items() if key not in self.private_receipts}
+
     def as_dict(self) -> dict[str, object]:
         """Serialize task observations without exposing ownership or resources."""
         end = self.finished_at if self.finished_at is not None else time.monotonic()
@@ -102,7 +128,7 @@ class SubagentStatus:
             "iteration": self.iteration,
             "tool_events": [dict(event) for event in self.tool_events],
             "usage": self.usage.to_dict() if self.usage is not None else None,
-            "receipts": dict(self.receipts),
+            "receipts": self.parent_receipts(),
             "result": self.result,
             "partial": self.partial,
             "stop_reason": self.stop_reason,
