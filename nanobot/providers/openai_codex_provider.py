@@ -15,7 +15,6 @@ from typing import Any, cast
 
 import httpx
 from loguru import logger
-from oauth_cli_kit import get_token as get_codex_token
 from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
 from oauth_cli_kit.storage import FileTokenStorage
 
@@ -39,7 +38,12 @@ from nanobot.providers.oauth_catalog_cache import (
     OAuthCatalogAuthRequiredError,
     OAuthModelCatalog,
     OAuthModelCatalogSnapshot,
-    oauth_catalog_auth_rejected,
+)
+from nanobot.providers.openai_codex_credentials import (
+    codex_refresh_rejected,
+)
+from nanobot.providers.openai_codex_credentials import (
+    get_codex_request_credentials as get_codex_token,
 )
 from nanobot.providers.openai_responses import (
     ResponsesBackend,
@@ -799,22 +803,10 @@ def invalidate_openai_codex_model_catalog() -> None:
 
 
 def _codex_login_required(exc: RuntimeError) -> bool:
-    # oauth-cli-kit exposes refresh failures as strings, not typed HTTP errors.
-    # Interpret only its exact envelope; never propagate the raw token response.
-    detail = str(exc)
-    if detail == "OAuth credentials not found. Please run the login command.":
-        return True
-    prefix = "Token refresh failed: "
-    if detail.startswith(prefix):
-        status, _, body = detail[len(prefix):].partition(" ")
-        payload: object = None
-        if len(body) <= 16_384:
-            try:
-                payload = json.loads(body)
-            except ValueError:
-                pass
-        return status.isdecimal() and oauth_catalog_auth_rejected(int(status), payload)
-    return False
+    return (
+        str(exc) == "OAuth credentials not found. Please run the login command."
+        or codex_refresh_rejected(exc)
+    )
 
 
 def _fetch_openai_codex_models(proxy: str | None) -> tuple[ProviderModelSpec, ...]:
