@@ -39,12 +39,20 @@ def get_oauth_model_catalog(
         from nanobot.providers.github_copilot_provider import get_github_copilot_model_catalog
 
         return get_github_copilot_model_catalog(proxy, refresh=refresh)
+    if provider_name == "antigravity":
+        from nanobot.providers.antigravity_provider import get_antigravity_model_catalog
+
+        return get_antigravity_model_catalog(proxy, refresh=refresh)
     raise ValueError(f"OAuth model discovery is not available for {provider_name}")
 
 
 def invalidate_oauth_model_catalog(provider_name: str) -> None:
     """Invalidate provider discovery after its OAuth identity changes."""
-    if provider_name == "openai_codex":
+    if provider_name == "antigravity":
+        from nanobot.providers.antigravity_provider import invalidate_antigravity_model_catalog
+
+        invalidate_antigravity_model_catalog()
+    elif provider_name == "openai_codex":
         from nanobot.providers.openai_codex_provider import (
             invalidate_openai_codex_model_catalog,
         )

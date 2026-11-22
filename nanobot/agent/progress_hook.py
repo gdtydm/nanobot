@@ -127,6 +127,7 @@ class AgentProgressHook(AgentHook):
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         if self._publish:
+            await self._publish_commentary(context)
             if not self._streaming and not context.streamed_content:
                 thought = self._strip_think(context.response.content if context.response else None)
                 if thought:
@@ -172,6 +173,8 @@ class AgentProgressHook(AgentHook):
             await self._publish(ProgressEvent(tool_hint=not finished, tool_events=payloads))
 
     async def after_iteration(self, context: AgentHookContext) -> None:
+        if context.response is not None and not context.response.should_execute_tools:
+            await self._publish_commentary(context)
         u = context.usage
         logger.debug(
             "LLM usage: input={} output={} cache_read={} cache_write={} source={}",
@@ -181,6 +184,11 @@ class AgentProgressHook(AgentHook):
             u.cache_write_tokens if u else None,
             u.source if u else "missing",
         )
+
+    async def _publish_commentary(self, context: AgentHookContext) -> None:
+        if self._publish and context.response is not None:
+            for item in context.response.commentary:
+                await self._publish(ProgressEvent(content=item.text))
 
     def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
         return self._strip_think(content)

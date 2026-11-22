@@ -9,7 +9,7 @@ import {
 } from "@/lib/provider-brand";
 
 describe("provider brand logos", () => {
-  it.each(["deepseek", "anthropic", "openai", "openai_codex", "gemini"])("bundles %s's primary logo without an external request", (provider) => {
+  it.each(["deepseek", "anthropic", "openai", "openai_codex", "gemini", "antigravity"])("bundles %s's primary logo without an external request", (provider) => {
     expect(providerBrand(provider)?.logoUrl).toMatch(/^\/src\/assets\/providers\/.*\.svg$/);
     expect(providerBrand(provider)?.logoUrl).toBe(providerBrand(provider)?.logoUrls[0]);
   });

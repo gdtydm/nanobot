@@ -1625,7 +1625,7 @@
       "localCodeHelp": "Conclua o login no navegador. O nanobot geralmente termina automaticamente; caso contrário, cole o código de autorização abaixo.",
       "remoteCodeHelp": "Selecione Entrar para abrir a xAI no seu computador. Após o login, cole abaixo o código de autorização exibido pela xAI.",
       "localCallbackHelp": "Conclua o login no navegador. Se o nanobot não se conectar automaticamente, copie a URL completa da barra de endereço da página localhost, mesmo que ela não carregue, cole abaixo e selecione “Concluir login”.",
-      "remoteCallbackHelp": "Abra o ChatGPT neste navegador e conclua o login. Na página localhost, copie a URL completa da barra de endereço, mesmo que a página não carregue, cole abaixo e selecione “Concluir login”.",
+      "remoteCallbackHelp": "Abra a página de login neste navegador e conclua o login. Na página localhost, copie a URL completa da barra de endereço, mesmo que a página não carregue, cole abaixo e selecione “Concluir login”.",
       "authorizationCode": "Código de autorização",
       "callbackUrl": "URL de callback",
       "callbackUrlPlaceholder": "Cole a URL de callback completa aqui",

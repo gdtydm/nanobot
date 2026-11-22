@@ -19,6 +19,68 @@ from nanobot.webui.settings_models import (
 )
 
 
+def test_antigravity_webui_login_pasted_callback_and_logout(tmp_path, monkeypatch):
+    from urllib.parse import parse_qs, urlencode, urlsplit
+
+    from nanobot.providers import antigravity_oauth as oauth
+    from nanobot.webui.settings_models import (
+        complete_oauth_provider,
+        login_oauth_provider,
+        logout_oauth_provider,
+        oauth_provider_status,
+    )
+    from nanobot.webui.settings_services import WebUIOAuthFlowRegistry
+
+    path = tmp_path / "auth" / "antigravity.json"
+    monkeypatch.setattr(oauth, "get_antigravity_storage_path", lambda: path)
+    seen_proxy = []
+
+    def handler(request):
+        if request.url.path == "/token":
+            form = parse_qs(request.content.decode())
+            assert form["client_id"] == ["test-client"] and "client_secret" not in form
+            return httpx.Response(200, json={"access_token": "secret", "refresh_token": "refresh", "expires_in": 3600})
+        if request.url.path.endswith("userinfo"):
+            return httpx.Response(200, json={"email": "test@example.com"})
+        return httpx.Response(200, json={"cloudaicompanionProject": "project"})
+
+    def client(proxy):
+        seen_proxy.append(proxy)
+        return httpx.Client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(oauth, "http_client", client)
+    config = Config()
+    config.network.proxy = "http://127.0.0.1:7890"
+    config.providers.antigravity.use_proxy = True
+    spec = find_by_name("antigravity")
+    registry = WebUIOAuthFlowRegistry()
+    try:
+        login_query = {"provider": ["antigravity"], "remote_browser": ["true"]}
+        monkeypatch.delenv("NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_ID", raising=False)
+        monkeypatch.delenv("NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_SECRET", raising=False)
+        with pytest.raises(WebUISettingsError, match="NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_ID") as error:
+            login_oauth_provider(config, login_query, oauth_flows=registry, config_path=None)
+        assert error.value.status == 400
+        monkeypatch.setenv("NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_ID", "test-client")
+        started = login_oauth_provider(config, login_query, oauth_flows=registry, config_path=None)
+        assert started["completion_input"] == "callback_url"
+        query = {"provider": ["antigravity"], "flow_id": [started["flow_id"]]}
+        with pytest.raises(WebUISettingsError, match="complete callback URL"):
+            complete_oauth_provider(query, "only-a-code", oauth_flows=registry, config_path=None, settings_payload=lambda **_: {})
+        assert registry.get("antigravity", started["flow_id"]) is not None
+        auth = parse_qs(urlsplit(started["authorization_url"]).query)
+        callback = auth["redirect_uri"][0] + "?" + urlencode({"code": "test-code", "state": auth["state"][0]})
+        result = complete_oauth_provider(query, callback, oauth_flows=registry, config_path=None,
+            settings_payload=lambda **_: oauth_provider_status(spec))
+        assert result["configured"] and result["account"] == "test@example.com"
+        assert seen_proxy == ["http://127.0.0.1:7890"]
+        signed_out = logout_oauth_provider({"provider": ["antigravity"]}, oauth_flows=registry, config_path=None,
+            settings_payload=lambda **_: oauth_provider_status(spec))
+        assert signed_out["configured"] is False
+    finally:
+        registry.close()
+
+
 def test_preset_request_overrides_redact_roundtrip_and_clear():
     config = Config()
     config.providers.openai.api_key = "fixture"

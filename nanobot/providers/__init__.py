@@ -14,6 +14,7 @@ __all__ = [
     "GitHubCopilotProvider",
     "AzureOpenAIProvider",
     "BedrockProvider",
+    "AntigravityProvider",
 ]
 
 _LAZY_IMPORTS = {
@@ -27,10 +28,12 @@ _LAZY_IMPORTS = {
     "GitHubCopilotProvider": ".github_copilot_provider",
     "AzureOpenAIProvider": ".azure_openai_provider",
     "BedrockProvider": ".bedrock_provider",
+    "AntigravityProvider": ".antigravity_provider",
 }
 
 if TYPE_CHECKING:
     from nanobot.providers.anthropic_provider import AnthropicProvider
+    from nanobot.providers.antigravity_provider import AntigravityProvider
     from nanobot.providers.azure_openai_provider import AzureOpenAIProvider
     from nanobot.providers.base import LLMProvider, LLMResponse, LLMUsage
     from nanobot.providers.bedrock_provider import BedrockProvider

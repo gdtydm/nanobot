@@ -21,6 +21,58 @@ async function chooseProviderToConfigure(label: string) {
 describe("Settings providers", () => {
   installSettingsViewTestHooks();
 
+  it.each([false, true])("signs in to Antigravity with a full callback URL (remote: %s)", async (remote) => {
+    const happyWindow = window as typeof window & { happyDOM: { setURL: (url: string) => void } };
+    const originalUrl = window.location.href;
+    happyWindow.happyDOM.setURL(remote ? "http://203.0.113.10:18887/#/settings?section=models" : "http://localhost:18887/#/settings?section=models");
+    try {
+      const payload = settingsPayload();
+      const provider = {
+        name: "antigravity", label: "Antigravity", configured: false,
+        auth_type: "oauth" as const, api_key_required: false, oauth_login_supported: true,
+        adapter_request_apis: ["antigravity_generate_content" as const],
+      };
+      payload.providers = [provider];
+      const signedIn = { ...payload, providers: [{ ...provider, configured: true, oauth_account: "test@example.com" }] };
+      const authorization = {
+        status: "authorization_required", provider: "antigravity", flow_id: "flow-antigravity",
+        authorization_url: "https://accounts.google.com/o/oauth2/v2/auth?state=test",
+        expires_in: 600, completion_input: "callback_url",
+      };
+      const callback = "http://localhost:51121/oauth-callback?code=test-code&state=test";
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/settings") return jsonResponse(payload);
+        return jsonResponse({});
+      }));
+      requestMutationMock.mockImplementation(async (action: string, values: Record<string, unknown>) => {
+        if (action === "settings.provider.oauth_login") return authorization;
+        if (values.authorization_response === callback) return signedIn;
+        return { status: "pending", provider: "antigravity", flow_id: "flow-antigravity" };
+      });
+      const popup = { closed: false, opener: window, location: { href: "about:blank" }, close: vi.fn() };
+      const open = vi.fn(() => popup);
+      vi.stubGlobal("open", open);
+      renderProviderManager({ initialSection: "models", initialSettings: payload });
+      await chooseProviderToConfigure("Antigravity");
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      const input = await screen.findByRole("textbox", { name: "Callback URL" });
+      expect(requestMutationMock).toHaveBeenCalledWith(
+        "settings.provider.oauth_login", { provider: "antigravity", ...(remote ? { remote_browser: true } : {}) }, 20_000,
+      );
+      expect(open).toHaveBeenCalledTimes(remote ? 0 : 1);
+      if (!remote) expect(popup.location.href).toBe(authorization.authorization_url);
+      if (remote) expect(screen.getByText(/^Open the sign-in page in this browser/)).toBeVisible();
+      fireEvent.change(input, { target: { value: callback } });
+      fireEvent.click(screen.getByRole("button", { name: "Finish sign-in" }));
+      await waitFor(() => expect(requestMutationMock).toHaveBeenCalledWith(
+        "settings.provider.oauth_complete",
+        { provider: "antigravity", flow_id: "flow-antigravity", authorization_response: callback }, 20_000,
+      ));
+    } finally {
+      happyWindow.happyDOM.setURL(originalUrl);
+    }
+  });
+
   it("manages providers unused by presets and returns focus through the manager", async () => {
     const user = userEvent.setup();
     const payload = settingsPayload();
@@ -666,12 +718,12 @@ describe("Settings providers", () => {
       ).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-      const dialog = (await screen.findByText("Open ChatGPT in this browser and finish signing in. On the localhost page, copy the full URL from the address bar—even if the page cannot load—paste it below, then select “Finish sign-in”.")).closest('[role="dialog"]') as HTMLElement;
+      const dialog = (await screen.findByText("Open the sign-in page in this browser and finish signing in. On the localhost page, copy the full URL from the address bar—even if the page cannot load—paste it below, then select “Finish sign-in”.")).closest('[role="dialog"]') as HTMLElement;
 
       expect(openMock).not.toHaveBeenCalled();
       expect(
         within(dialog).getByText(
-          "Open ChatGPT in this browser and finish signing in. On the localhost page, copy the full URL from the address bar—even if the page cannot load—paste it below, then select “Finish sign-in”.",
+          "Open the sign-in page in this browser and finish signing in. On the localhost page, copy the full URL from the address bar—even if the page cannot load—paste it below, then select “Finish sign-in”.",
         ),
       ).toBeInTheDocument();
       expect(within(dialog).getByText("Paste the callback URL to continue.")).toBeInTheDocument();

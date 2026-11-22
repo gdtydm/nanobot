@@ -212,11 +212,13 @@ class _SubagentHook(AgentHook):
 
     def __init__(self, status: SubagentStatus | None = None,
                  *, check_active: Callable[[], None] | None = None,
+                 native_commentary: bool = False,
                  max_result_chars: int = 16000,
                  on_status: Callable[[SubagentStatus], Awaitable[None]] | None = None) -> None:
         super().__init__()
         self._status = status
         self._check_active = check_active
+        self._native_commentary = native_commentary
         self._max_result_chars = max_result_chars
         self._on_status = on_status
 
@@ -230,6 +232,7 @@ class _SubagentHook(AgentHook):
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         self._remember_output(context)
+        self._remember_commentary(context)
         if self._status is not None:
             self._status.tool_events = [
                 {"name": call.name, "status": "running"} for call in context.tool_calls
@@ -251,10 +254,20 @@ class _SubagentHook(AgentHook):
         self._status.tool_events = list(context.tool_events)
         self._status.usage = context.usage
         self._remember_output(context)
+        if context.response is not None and not context.response.should_execute_tools:
+            self._remember_commentary(context)
         if context.error:
             self._status.error = str(context.error)
         if self._on_status is not None:
             await self._on_status(self._status)
+
+    def _remember_commentary(self, context: AgentHookContext) -> None:
+        if not self._native_commentary or self._status is None or context.response is None:
+            return
+        for item in context.response.commentary:
+            summary = item.text.strip()[:800]
+            if summary:
+                self._status.record_progress(item.id or summary, summary)
 
 
 @tool_parameters(tool_parameters_schema(
@@ -1666,7 +1679,11 @@ class SubagentManager:
         tools = self._build_tools(
             tools_config=cfg, exec_manager=record.exec_manager, repository_skill_roots=repository_skill_roots,
         )
-        tools.register(_ReportProgressTool(partial(self._report_progress, record)))
+        native_commentary = runtime.provider.supports_commentary(
+            runtime.model, runtime.generation.reasoning_effort,
+        ) is True
+        if not native_commentary:
+            tools.register(_ReportProgressTool(partial(self._report_progress, record)))
         if record.announce and self.send_task_notice is not None and self.sessions is not None:
             tools.register(_RequestInputTool(partial(self._request_native_input, record)))
         observe_model_request = None
@@ -1674,7 +1691,7 @@ class SubagentManager:
         with capture_sources() if trace_enabled else nullcontext() as sources:
             system_prompt = self._build_subagent_prompt(
                 workspace=root, project=status.project is not None, worktree=status.worktree is not None,
-                project_skill_roots=project_skill_roots,
+                project_skill_roots=project_skill_roots, native_commentary=native_commentary,
             )
         if self.sessions is not None and sources is not None:
             trace = SubagentRequestTrace(self.sessions.sessions.state, record.session, sources.sources)
@@ -1714,6 +1731,7 @@ class SubagentManager:
             registered_hook_factories=[create_file_edit_activity_hook],
             turn_hooks=[activity, _SubagentHook(
                 status, check_active=record.raise_if_stopping,
+                native_commentary=native_commentary,
                 max_result_chars=self.max_tool_result_chars,
                 on_status=save_observation,
             )],
@@ -1772,6 +1790,7 @@ class SubagentManager:
                 consolidate_provider_compaction=consolidate_provider_compaction,
                 events=events,
                 observe_model_request=observe_model_request,
+                capture_tool_commentary=native_commentary,
             ))
         finally:
             if token is not None:
@@ -1881,6 +1900,7 @@ class SubagentManager:
         project: bool = False,
         worktree: bool = False,
         project_skill_roots: tuple[Path, ...] = (),
+        native_commentary: bool = False,
     ) -> str:
         agent_workspace = self.workspace.expanduser().resolve()
         project_workspace = workspace.expanduser().resolve() if workspace else agent_workspace
@@ -1903,6 +1923,7 @@ class SubagentManager:
             skills_summary=skills_summary or "",
             project=project,
             worktree=worktree,
+            native_commentary=native_commentary,
             project_instructions=load_project_instructions(project_workspace) if project else "",
         )
 

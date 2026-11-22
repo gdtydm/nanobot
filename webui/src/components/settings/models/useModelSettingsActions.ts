@@ -522,7 +522,7 @@ export function useModelSettingsActions({
     let popup: Window | null = null;
     if (
       action === "login"
-      && providerName === "xai_grok"
+      && (providerName === "xai_grok" || providerName === "antigravity")
       && !remoteBrowserAccess
     ) {
       try {
@@ -539,7 +539,7 @@ export function useModelSettingsActions({
           ? await loginProviderOAuth(
               client,
               providerName,
-              providerName === "openai_codex" && remoteBrowserAccess,
+              (providerName === "openai_codex" || providerName === "antigravity") && remoteBrowserAccess,
             )
           : await logoutProviderOAuth(client, providerName);
       if (isProviderOAuthAuthorizationRequired(payload)) {

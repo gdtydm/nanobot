@@ -123,7 +123,7 @@ class ProviderModelRowPayload(ProviderModelMetadataPayload):
     description: NotRequired[str]
 
 
-_OAUTH_PROXY_PROVIDERS = {"openai_codex", "xai_grok"}
+_OAUTH_PROXY_PROVIDERS = {"openai_codex", "xai_grok", "antigravity"}
 _WEBUI_OAUTH_TIMEOUT_S = 600
 _MODEL_CONFIGURATION_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
 _ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -208,6 +208,17 @@ def provider_requires_api_base(spec: Any) -> bool:
 def oauth_provider_status(spec: Any) -> dict[str, Any]:
     if not getattr(spec, "is_oauth", False):
         return {"configured": False, "account": None, "expires_at": None, "login_supported": False}
+
+    if spec.name == "antigravity":
+        from nanobot.providers.antigravity_oauth import get_antigravity_login_status
+
+        token = get_antigravity_login_status()
+        return {
+            "configured": bool(token and (token.refresh or token.expires > time.time() * 1000)),
+            "account": token.account_id if token else None,
+            "expires_at": token.expires if token else None,
+            "login_supported": True,
+        }
 
     if spec.name == "openai_codex":
         try:
@@ -343,7 +354,7 @@ def _provider_advanced_field_names(name: str, spec: Any) -> list[str]:
     fields: list[str] = []
     if spec.backend in {"openai_compat", "anthropic"}:
         fields.append("extra_headers")
-    if spec.backend in {"openai_compat", "anthropic", "bedrock", "openai_codex", "xai_grok"}:
+    if spec.backend in {"openai_compat", "anthropic", "bedrock", "openai_codex", "xai_grok", "antigravity"}:
         fields.append("extra_body")
     if spec.backend in {"openai_compat", "anthropic"}:
         fields.extend(("extra_query", "use_proxy"))
@@ -1808,6 +1819,35 @@ def login_oauth_provider(
             "completion_input": "device_code",
         }
 
+    if spec.name == "antigravity":
+        from nanobot.providers.antigravity_oauth import AntigravityOAuthError, AntigravityOAuthFlow
+
+        resolved_config = resolve_config_env_vars(config, config_path=config_path)
+        proxy = resolved_config.network.resolve_proxy(resolved_config.providers.antigravity.use_proxy)
+        remote_value = query_first(query, "remote_browser")
+        remote = parse_bool(remote_value, "remote_browser") if remote_value is not None else False
+        try:
+            antigravity_flow = AntigravityOAuthFlow(
+                proxy=proxy, timeout_s=_WEBUI_OAUTH_TIMEOUT_S, remote_browser=remote,
+            )
+        except AntigravityOAuthError as exc:
+            raise WebUISettingsError(str(exc), status=400) from exc
+        except OSError as exc:
+            raise WebUISettingsError("Could not open the Antigravity callback listener. Close another sign-in and retry.", status=409) from exc
+        flow_id = secrets.token_urlsafe(24)
+        try:
+            oauth_flows.register(spec.name, flow_id, antigravity_flow)
+            antigravity_flow.start()
+        except Exception:
+            antigravity_flow.cancel()
+            oauth_flows.remove(spec.name, flow_id, antigravity_flow)
+            raise WebUISettingsError("Could not start Antigravity sign-in. Please retry.", status=502) from None
+        return {
+            "status": "authorization_required", "provider": spec.name, "flow_id": flow_id,
+            "authorization_url": antigravity_flow.authorization_url,
+            "expires_in": antigravity_flow.remaining_seconds, "completion_input": "callback_url",
+        }
+
     if spec.name == "xai_grok":
         from nanobot.providers.xai_oauth import create_xai_oauth_login
 
@@ -1853,7 +1893,7 @@ def complete_oauth_provider(
     provider_name = (query_first(query, "provider") or "").strip()
     flow_id = (query_first(query, "flow_id") or "").strip()
     spec = find_by_name(provider_name)
-    if spec is None or spec.name not in {"openai_codex", "xai_grok", "github_copilot"}:
+    if spec is None or spec.name not in {"openai_codex", "xai_grok", "github_copilot", "antigravity"}:
         raise WebUISettingsError("OAuth completion is not supported for this provider")
     if not flow_id:
         raise WebUISettingsError("flow_id is required")
@@ -1868,7 +1908,14 @@ def complete_oauth_provider(
         return {"status": "cancelled", "provider": spec.name, "flow_id": flow_id}
 
     try:
-        if spec.name == "openai_codex":
+        if spec.name == "antigravity":
+            from nanobot.providers.antigravity_oauth import AntigravityOAuthInputError
+
+            try:
+                token = flow.complete(authorization_response)
+            except AntigravityOAuthInputError as exc:
+                raise WebUISettingsError(str(exc), status=400) from exc
+        elif spec.name == "openai_codex":
             from nanobot.providers.openai_codex_oauth import OpenAICodexOAuthInputError
 
             try:
@@ -1929,6 +1976,13 @@ def logout_oauth_provider(
             raise WebUISettingsError(OAUTH_CLI_KIT_MISSING_MESSAGE, status=500) from None
         oauth_flows.clear(spec.name)
         token_path = get_storage().get_token_path()
+    elif spec.name == "antigravity":
+        from nanobot.providers.antigravity_oauth import logout_antigravity
+
+        oauth_flows.clear(spec.name)
+        logout_antigravity()
+        invalidate_oauth_model_catalog(spec.name)
+        return settings_payload(config_path=config_path)
     elif spec.name == "xai_grok":
         from nanobot.providers.xai_oauth import logout_xai_oauth
 

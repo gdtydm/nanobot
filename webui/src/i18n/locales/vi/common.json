@@ -1623,7 +1623,7 @@
       "localCodeHelp": "Hoàn tất đăng nhập trong trình duyệt. nanobot thường tự động hoàn tất; nếu không, hãy dán mã ủy quyền bên dưới.",
       "remoteCodeHelp": "Chọn Đăng nhập để mở xAI trên máy tính của bạn. Sau khi đăng nhập, hãy dán mã ủy quyền do xAI hiển thị bên dưới.",
       "localCallbackHelp": "Hoàn tất đăng nhập trong trình duyệt. Nếu nanobot không tự động kết nối, hãy sao chép URL đầy đủ từ thanh địa chỉ của trang localhost, ngay cả khi trang không tải được, dán vào bên dưới rồi chọn “Hoàn tất đăng nhập”.",
-      "remoteCallbackHelp": "Mở ChatGPT trong trình duyệt này và hoàn tất đăng nhập. Khi chuyển đến trang localhost, hãy sao chép URL đầy đủ từ thanh địa chỉ, ngay cả khi trang không tải được, dán vào bên dưới rồi chọn “Hoàn tất đăng nhập”.",
+      "remoteCallbackHelp": "Mở trang đăng nhập trong trình duyệt này và hoàn tất đăng nhập. Khi chuyển đến trang localhost, hãy sao chép URL đầy đủ từ thanh địa chỉ, ngay cả khi trang không tải được, dán vào bên dưới rồi chọn “Hoàn tất đăng nhập”.",
       "authorizationCode": "Mã ủy quyền",
       "callbackUrl": "URL callback",
       "callbackUrlPlaceholder": "Dán URL callback đầy đủ vào đây",

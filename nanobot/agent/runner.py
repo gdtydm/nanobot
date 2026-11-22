@@ -128,6 +128,7 @@ class AgentRunSpec:
     llm_usage_source: LLMUsageSource | None = None
     events: EventSink = NO_EVENTS
     observe_model_request: ModelRequestObserver | None = None
+    capture_tool_commentary: bool = False
 
 
 @dataclass(slots=True)
@@ -952,6 +953,7 @@ class AgentRunner:
             "provider_context": replace(
                 provider_context or ProviderCallContext(),
                 response_preset=spec.runtime.model_preset or "",
+                capture_tool_commentary=spec.capture_tool_commentary,
             ),
         }
 

@@ -23,12 +23,14 @@ _PROVIDER_DISPLAY: dict[str, str] = {
     "openai_codex": "OpenAI Codex",
     "xai_grok": "xAI Grok",
     "github_copilot": "GitHub Copilot",
+    "antigravity": "Antigravity",
 }
 
 _OAUTH_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "openai_codex": "openai-codex/gpt-5.6-sol",
     "xai_grok": "xai-grok/grok-4.6",
     "github_copilot": "github-copilot/gpt-5.4-mini",
+    "antigravity": "antigravity/gemini-3-flash",
 }
 
 
@@ -124,6 +126,21 @@ def _set_oauth_provider_as_main(
 
     config = load_config(resolved_config_path)
     selected_model = (model or "").strip() or _OAUTH_PROVIDER_DEFAULT_MODELS[provider_name]
+    if provider_name == "antigravity":
+        from nanobot.config.loader import resolve_config_env_vars
+        from nanobot.providers.antigravity_provider import get_antigravity_model_catalog
+
+        resolved_config = resolve_config_env_vars(config, config_path=resolved_config_path)
+        proxy = resolved_config.network.resolve_proxy(resolved_config.providers.antigravity.use_proxy)
+        catalog = get_antigravity_model_catalog(proxy)
+        if not model and catalog.find(selected_model) is None:
+            if not catalog.models:
+                console.print("[red]Signed in, but no model catalog is available. Retry or pass --model.[/red]")
+                raise typer.Exit(1)
+            selected_model = next((item.id for item in catalog.models if item.id.startswith("antigravity/gemini-")), catalog.models[0].id)
+        metadata = catalog.find(selected_model)
+        if metadata is not None and metadata.context_window is not None:
+            config.agents.defaults.context_window_tokens = metadata.context_window
     config.agents.defaults.model_preset = None
     config.agents.defaults.provider = provider_name
     config.agents.defaults.model = selected_model
@@ -146,7 +163,7 @@ def _set_oauth_provider_as_main(
 def provider_login(
     provider: str = typer.Argument(
         ...,
-        help="OAuth provider (e.g. 'openai-codex', 'xai-grok', 'github-copilot')",
+        help="OAuth provider (e.g. 'openai-codex', 'xai-grok', 'github-copilot', 'antigravity')",
     ),
     set_main: bool = typer.Option(
         False,
@@ -187,7 +204,7 @@ def provider_login(
 def provider_logout(
     provider: str = typer.Argument(
         ...,
-        help="OAuth provider (e.g. 'openai-codex', 'xai-grok', 'github-copilot')",
+        help="OAuth provider (e.g. 'openai-codex', 'xai-grok', 'github-copilot', 'antigravity')",
     ),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
@@ -354,13 +371,47 @@ def _login_github_copilot() -> None:
         raise typer.Exit(1)
 
 
+def _login_antigravity() -> None:
+    from nanobot.config.loader import load_config, resolve_config_env_vars
+    from nanobot.providers.antigravity_oauth import (
+        AntigravityReauthRequiredError,
+        get_antigravity_token,
+        login_antigravity,
+    )
+    from nanobot.providers.antigravity_provider import invalidate_antigravity_model_catalog
+
+    try:
+        config = resolve_config_env_vars(load_config())
+        proxy = config.network.resolve_proxy(config.providers.antigravity.use_proxy)
+        try:
+            token = get_antigravity_token(proxy=proxy)
+        except AntigravityReauthRequiredError:
+            token = login_antigravity(proxy=proxy, print_fn=console.print, prompt_fn=typer.prompt)
+        invalidate_antigravity_model_catalog()
+    except Exception as exc:
+        console.print(f"[red]Antigravity sign-in failed: {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"[green]✓ Signed in to Antigravity[/green]  {token.account_id}")
+
+
+def _logout_antigravity() -> None:
+    from nanobot.providers.antigravity_oauth import logout_antigravity
+    from nanobot.providers.antigravity_provider import invalidate_antigravity_model_catalog
+
+    removed = logout_antigravity()
+    invalidate_antigravity_model_catalog()
+    console.print("[green]✓ Signed out of Antigravity[/green]" if removed else "[dim]Antigravity is already signed out.[/dim]")
+
+
 _LOGIN_HANDLERS: dict[str, Callable[[], None]] = {
     "openai_codex": _login_openai_codex,
     "xai_grok": _login_xai_grok,
     "github_copilot": _login_github_copilot,
+    "antigravity": _login_antigravity,
 }
 _LOGOUT_HANDLERS: dict[str, Callable[[], None]] = {
     "openai_codex": _logout_openai_codex,
     "xai_grok": _logout_xai_grok,
     "github_copilot": _logout_github_copilot,
+    "antigravity": _logout_antigravity,
 }

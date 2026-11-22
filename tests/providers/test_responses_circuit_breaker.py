@@ -3,6 +3,7 @@ import time
 import pytest
 
 from nanobot.providers.base import ProviderCallContext
+from nanobot.providers.fallback_provider import FallbackProvider
 from nanobot.providers.openai_compat_provider import (
     _RESPONSES_FAILURE_THRESHOLD,
     _RESPONSES_PROBE_INTERVAL_S,
@@ -31,6 +32,18 @@ def provider():
 
 def test_responses_api_available_by_default(provider):
     assert provider._should_use_responses_api("gpt-5", None) is True
+
+
+def test_commentary_capability_depends_on_model_and_request_route(provider):
+    assert not provider.supports_commentary("gpt-5.4")  # Automatic routing can fall back to Chat Completions.
+    provider._preset_model_api = ModelAPICapabilities(("responses",), "responses")
+    assert provider.supports_commentary("gpt-5.4")
+    assert provider.supports_commentary("gpt-6.2-sol")
+    assert not provider.supports_commentary("gpt-5")
+    gemini = OpenAICompatProvider(api_key="fixture", spec=find_by_name("gemini"), default_model="gemini-4-neon")
+    assert not gemini.supports_commentary()
+    with_backup = FallbackProvider(provider, [gemini.get_default_model()], lambda _preset: gemini)
+    assert not with_backup.supports_commentary("gpt-5.4")
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,7 @@ def isolate_request_overrides(
 def request_override_fields(backend: str) -> tuple[str, ...]:
     if backend in {"openai_compat", "anthropic"}:
         return ("extra_headers", "extra_query", "extra_body")
-    if backend in {"openai_codex", "xai_grok", "bedrock"}:
+    if backend in {"openai_codex", "xai_grok", "bedrock", "antigravity"}:
         return ("extra_body",)
     return ()
 

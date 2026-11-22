@@ -1805,7 +1805,7 @@
       "localCodeHelp": "请在浏览器中完成登录。若 nanobot 未自动完成连接，请将授权码粘贴到下方。",
       "remoteCodeHelp": "点击“登录”在你的电脑上打开 xAI。完成登录后，请将 xAI 显示的授权码粘贴到下方。",
       "localCallbackHelp": "在浏览器中完成登录。若 nanobot 未自动连接，请复制 localhost 页面地址栏中的完整链接（即使页面无法打开），粘贴到下方，再点击“完成登录”。",
-      "remoteCallbackHelp": "在此浏览器中打开 ChatGPT 并完成登录。跳转到 localhost 页面后，即使页面无法打开，也请复制地址栏中的完整链接，粘贴到下方，再点击“完成登录”。",
+      "remoteCallbackHelp": "在此浏览器中打开登录页面 并完成登录。跳转到 localhost 页面后，即使页面无法打开，也请复制地址栏中的完整链接，粘贴到下方，再点击“完成登录”。",
       "authorizationCode": "授权码",
       "callbackUrl": "回调 URL",
       "callbackUrlPlaceholder": "在此粘贴完整的回调链接",

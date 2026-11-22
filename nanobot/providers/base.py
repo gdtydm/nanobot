@@ -268,9 +268,9 @@ class ProviderConversationState:
 class ProviderCallContext:
     """Optional provider-owned continuation data for one model request.
 
-    The regular ``chat`` contract stays provider-agnostic. Responses-capable
-    providers consume this context through the opt-in ``chat_with_context``
-    hooks, while every other provider inherits the context-free delegation.
+    The regular ``chat`` contract stays provider-agnostic. Adapters that need
+    per-request state use the ``chat_with_context`` hooks. Other providers
+    inherit the context-free delegation.
     ``session_id`` gives providers a stable conversation-scoped routing key
     without exposing that identity in the public message transcript.
     """
@@ -282,6 +282,8 @@ class ProviderCallContext:
     # None opts out (auxiliary calls); an empty name denotes an unnamed preset.
     response_preset: str | None = None
     response_is_fallback: bool = False
+    # A caller that prompted for progress may opt into untagged pre-tool text.
+    capture_tool_commentary: bool = False
     # A pre-request compactor must fit this budget before sending the pending input.
     compaction_input_budget: int | None = None
     # Owned by one retry chain, shared only by its provider attempts.
@@ -310,6 +312,14 @@ class ProviderCallContext:
     def current_conversation_state(self) -> ProviderConversationState | None:
         accepted = self.accepted_compaction
         return accepted.state if accepted is not None else self.conversation_state
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCommentary:
+    """A completed, user-facing progress message from a model."""
+
+    text: str
+    id: str | None = None
 
 
 @dataclass
@@ -361,6 +371,7 @@ class LLMResponse:
     # Keep this separate from the last response's retry policy.
     primary_error_kind: str | None = field(default=None, repr=False)
     is_fallback: bool = field(default=False, repr=False)
+    commentary: tuple[ModelCommentary, ...] = ()
 
     @property
     def has_tool_calls(self) -> bool:
@@ -627,6 +638,12 @@ class LLMProvider(ABC):
 
     def supports_pre_request_compaction(self, model: str | None = None) -> bool:
         """Whether the provider enforces compaction_input_budget before generation."""
+        return False
+
+    def supports_commentary(
+        self, model: str | None = None, reasoning_effort: str | None = None,
+    ) -> bool:
+        """Whether the request route supports user-facing progress messages."""
         return False
 
     @staticmethod

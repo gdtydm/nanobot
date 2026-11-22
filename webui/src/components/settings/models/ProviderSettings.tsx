@@ -66,7 +66,7 @@ import type {
   SettingsPayload,
 } from "@/lib/types";
 
-const OAUTH_PROXY_PROVIDERS = new Set(["openai_codex", "xai_grok"]);
+const OAUTH_PROXY_PROVIDERS = new Set(["openai_codex", "xai_grok", "antigravity"]);
 type ProviderRequestOption = {
   kind: "priority" | "hosted_tool";
   titleKey: string;

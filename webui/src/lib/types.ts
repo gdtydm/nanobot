@@ -663,7 +663,7 @@ export interface ModelAPIConfig {
 }
 
 export type ProviderRequestAPI =
-  "chat_completions" | "responses" | "anthropic_messages" | "bedrock_converse" | "transcription";
+  "chat_completions" | "responses" | "anthropic_messages" | "bedrock_converse" | "transcription" | "antigravity_generate_content";
 
 export interface AutomaticModelAPIPayload {
   provider: string;

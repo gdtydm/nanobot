@@ -1,3 +1,4 @@
+import antigravityLogo from "@/assets/providers/antigravity-color.svg";
 import anthropicLogo from "@/assets/providers/anthropic.svg";
 import deepseekLogo from "@/assets/providers/deepseek-color.svg";
 import geminiLogo from "@/assets/providers/gemini-color.svg";
@@ -161,6 +162,7 @@ const PROVIDER_BRANDS: Record<string, ProviderBrand> = {
   aihubmix: { ...brand("aihubmix.com", "#111827", "AH"), logoLayout: "tile" },
   ant_ling: brand("ant-ling.com", "#7C3AED", "AL"),
   anthropic: brand("anthropic.com", "#D97757", "A", [anthropicLogo]),
+  antigravity: brand("antigravity.google", "#4285F4", "AG", [antigravityLogo]),
   assemblyai: brand("assemblyai.com", "#111827", "AA"),
   atomic_chat: brand("atomic.chat", "#111827", "AC"),
   azure_openai: brand("azure.microsoft.com", "#0078D4", "AZ"),

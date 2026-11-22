@@ -38,6 +38,7 @@ def test_importing_providers_package_is_lazy(monkeypatch) -> None:
             "GitHubCopilotProvider",
             "AzureOpenAIProvider",
             "BedrockProvider",
+            "AntigravityProvider",
         ]
     finally:
         # Importing a replacement subpackage also replaces nanobot.providers on the

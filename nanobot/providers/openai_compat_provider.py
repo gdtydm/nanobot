@@ -38,6 +38,7 @@ from nanobot.providers.model_api import (
     hosted_web_search_enabled,
     is_direct_openai_base,
     is_hosted_web_search_tool,
+    supports_openai_commentary,
 )
 from nanobot.providers.openai_responses import ResponsesBackend, responses_state_matches
 from nanobot.providers.openai_responses.errors import (
@@ -1046,6 +1047,21 @@ class OpenAICompatProvider(LLMProvider):
     ) -> bool:
         api = self._model_api_capabilities(model, reasoning_effort)
         return "chat_completions" not in api.supported_apis or self._hosted_web_search_enabled()
+
+    def supports_commentary(
+        self, model: str | None = None, reasoning_effort: str | None = None,
+    ) -> bool:
+        api_base = self._effective_base or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com")
+        request_model = self._extra_body.get("model", model or self.default_model)
+        return (
+            self._spec is not None
+            and self._spec.name == "openai"
+            and urlparse(api_base).hostname == "api.openai.com"
+            and isinstance(request_model, str)
+            and supports_openai_commentary(request_model)
+            and self._responses_is_required(model, reasoning_effort)
+            and self._should_use_responses_api(model, reasoning_effort)
+        )
 
     def _hosted_web_search_enabled(self) -> bool:
         return hosted_web_search_enabled(self._extra_body)

@@ -34,6 +34,7 @@ from nanobot.providers.compaction import (
     provider_compaction_scope,
 )
 from nanobot.providers.images import prepare_inline_images
+from nanobot.providers.model_api import supports_openai_commentary
 from nanobot.providers.oauth_catalog_cache import (
     OAuthCatalogAuthRequiredError,
     OAuthModelCatalog,
@@ -548,6 +549,11 @@ class OpenAICodexProvider(LLMProvider):
 
     def supports_pre_request_compaction(self, model: str | None = None) -> bool:
         return self.supports_native_compaction(model)
+
+    def supports_commentary(
+        self, model: str | None = None, reasoning_effort: str | None = None,
+    ) -> bool:
+        return supports_openai_commentary(model or self.default_model)
 
 
 def _strip_model_prefix(model: str) -> str:

@@ -33,6 +33,7 @@ export function ModelAPIControl({
   const labels = {
     ...REQUEST_API_LABELS,
     bedrock_converse: "Bedrock Converse",
+    antigravity_generate_content: "Antigravity",
     transcription: t("settings.models.apiTranscription"),
   };
   const fixedLabel = fixedAPI ? labels[fixedAPI] : undefined;

@@ -1,4 +1,8 @@
-Bundled provider icons: deepseek-color.svg, anthropic.svg, openai.svg, gemini-color.svg.
+Antigravity icon: antigravity-color.svg.
+Source: https://antigravity.google/press (Icon - Full Color)
+Unmodified SVG asset. The Antigravity mark belongs to Google.
+
+Bundled LobeHub provider icons: deepseek-color.svg, anthropic.svg, openai.svg, gemini-color.svg.
 Source: https://github.com/lobehub/lobe-icons/tree/79b551cf26aab9ea4ac701fb807160950a5b860f/packages/static-svg/icons
 Unmodified SVG assets. Brand marks belong to their respective owners.
 

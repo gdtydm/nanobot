@@ -336,6 +336,7 @@ class ProvidersConfig(Base):
     atomic_chat: ProviderConfig = Field(default_factory=ProviderConfig)
     ovms: ProviderConfig = Field(default_factory=ProviderConfig)
     gemini: ProviderConfig = Field(default_factory=ProviderConfig)
+    antigravity: ProviderConfig = Field(default_factory=ProviderConfig)
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
     kimi_coding: ProviderConfig = Field(default_factory=ProviderConfig)  # Kimi Coding Plan (Anthropic Messages API)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)

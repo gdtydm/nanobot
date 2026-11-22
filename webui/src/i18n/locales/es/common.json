@@ -1623,7 +1623,7 @@
       "localCodeHelp": "Completa el inicio de sesión en el navegador. nanobot suele finalizar automáticamente; si no lo hace, pega el código de autorización abajo.",
       "remoteCodeHelp": "Selecciona Iniciar sesión para abrir xAI en tu computadora. Después de iniciar sesión, pega abajo el código de autorización que muestra xAI.",
       "localCallbackHelp": "Completa el inicio de sesión en el navegador. Si nanobot no se conecta automáticamente, copia la URL completa de la barra de direcciones de la página localhost, aunque no cargue, pégala abajo y selecciona «Completar inicio de sesión».",
-      "remoteCallbackHelp": "Abre ChatGPT en este navegador y completa el inicio de sesión. En la página localhost, copia la URL completa de la barra de direcciones, aunque la página no cargue, pégala abajo y selecciona «Completar inicio de sesión».",
+      "remoteCallbackHelp": "Abre la página de inicio de sesión en este navegador y completa el inicio de sesión. En la página localhost, copia la URL completa de la barra de direcciones, aunque la página no cargue, pégala abajo y selecciona «Completar inicio de sesión».",
       "authorizationCode": "Código de autorización",
       "callbackUrl": "URL de callback",
       "callbackUrlPlaceholder": "Pega aquí la URL de callback completa",

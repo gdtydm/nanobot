@@ -1805,7 +1805,7 @@
       "localCodeHelp": "Complete sign-in in your browser. If nanobot does not connect automatically, paste the authorization code below.",
       "remoteCodeHelp": "Select Sign in to open xAI on your computer. After signing in, paste the authorization code shown by xAI below.",
       "localCallbackHelp": "Finish signing in using your browser. If nanobot does not connect automatically, copy the full URL from the localhost page’s address bar—even if the page cannot load—paste it below, then select “Finish sign-in”.",
-      "remoteCallbackHelp": "Open ChatGPT in this browser and finish signing in. On the localhost page, copy the full URL from the address bar—even if the page cannot load—paste it below, then select “Finish sign-in”.",
+      "remoteCallbackHelp": "Open the sign-in page in this browser and finish signing in. On the localhost page, copy the full URL from the address bar—even if the page cannot load—paste it below, then select “Finish sign-in”.",
       "authorizationCode": "Authorization code",
       "callbackUrl": "Callback URL",
       "callbackUrlPlaceholder": "Paste the full callback URL here",

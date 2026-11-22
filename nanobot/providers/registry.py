@@ -67,7 +67,7 @@ class ProviderSpec:
     settings_alias_for: str = ""  # compatibility alias grouped under this provider in Settings
 
     # "openai_compat" | "anthropic" | "azure_openai" | "openai_codex" | "xai_grok"
-    # | "github_copilot" | "bedrock"
+    # | "github_copilot" | "bedrock" | "antigravity"
     backend: str = "openai_compat"
 
     # extra env vars / request headers supplied by the provider integration.
@@ -649,6 +649,17 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
             reasoning_replay="plaintext",
             supports_hosted_web_search=False,
         ),
+    ),
+    ProviderSpec(
+        name="antigravity",
+        keywords=("antigravity",),
+        env_key="",
+        request_apis=("antigravity_generate_content",),
+        display_name="Antigravity",
+        backend="antigravity",
+        model_catalog="hybrid",
+        is_oauth=True,
+        strip_model_prefixes=("antigravity",),
     ),
     ProviderSpec(
         name="gemini",

@@ -819,6 +819,34 @@ def test_provider_login_can_set_openai_codex_as_main_provider(tmp_path):
     assert make_provider(saved).__class__.__name__ == "OpenAICodexProvider"
 
 
+def test_antigravity_cli_login_selects_account_model_and_logout_removes_credentials(tmp_path, monkeypatch):
+    import time
+
+    from nanobot.providers import antigravity_oauth as oauth
+    from nanobot.providers.oauth_catalog_cache import OAuthModelCatalogSnapshot
+    from nanobot.providers.registry import ProviderModelSpec
+
+    config_path = tmp_path / "config.json"
+    token = oauth.AntigravityToken("secret", "refresh", int(time.time() * 1000) + 3_600_000, "test@example.com", "project")
+    monkeypatch.setattr(oauth, "get_antigravity_token", lambda **_: token)
+    monkeypatch.setattr("nanobot.providers.antigravity_provider.get_antigravity_model_catalog", lambda *_args: OAuthModelCatalogSnapshot(
+        models=(ProviderModelSpec(id="antigravity/gemini-3-flash", context_window=1_048_576),), source="remote", fetched_at=1,
+    ))
+    result = runner.invoke(app, ["provider", "login", "antigravity", "--set-main", "--config", str(config_path)])
+    assert result.exit_code == 0, result.stdout
+    saved = Config.model_validate(json.loads(config_path.read_text()))
+    assert saved.agents.defaults.provider == "antigravity"
+    assert saved.agents.defaults.model == "antigravity/gemini-3-flash"
+    assert saved.agents.defaults.context_window_tokens == 1_048_576
+    assert make_provider(saved).__class__.__name__ == "AntigravityProvider"
+    credential_path = tmp_path / "auth" / "antigravity.json"
+    oauth._write_token(credential_path, token)
+    result = runner.invoke(app, ["provider", "logout", "antigravity", "--config", str(config_path)])
+    assert result.exit_code == 0
+    assert oauth.get_antigravity_login_status(credential_path) is None
+    assert "Signed out of Antigravity" in result.stdout
+
+
 def test_provider_login_can_set_github_copilot_as_main_provider(tmp_path):
     config_path = tmp_path / "config.json"
     original = provider_commands._LOGIN_HANDLERS["github_copilot"]

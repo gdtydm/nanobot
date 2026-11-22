@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit
@@ -7,7 +8,14 @@ from urllib.parse import urlsplit
 RequestAPI = Literal["chat_completions", "responses", "anthropic_messages"]
 ProviderAPI = Literal[
     "chat_completions", "responses", "anthropic_messages", "bedrock_converse", "transcription",
+    "antigravity_generate_content",
 ]
+
+
+def supports_openai_commentary(model: str) -> bool:
+    """Recognize OpenAI model families with phased assistant messages."""
+    name = model.rsplit("/", 1)[-1].lower()
+    return re.match(r"gpt-(?:5\.(?:3-codex|[4-6])|6(?:\.\d+)?)(?:-|$)", name) is not None
 
 
 def is_direct_openai_base(api_base: str | None) -> bool:

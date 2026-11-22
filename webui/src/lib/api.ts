@@ -1360,7 +1360,7 @@ export async function fetchAutomaticModelAPI(
   const api = result.api;
   if (typeof result.provider !== "string" || (
     api !== "chat_completions" && api !== "responses" && api !== "anthropic_messages"
-    && api !== "bedrock_converse" && api !== "transcription"
+    && api !== "bedrock_converse" && api !== "transcription" && api !== "antigravity_generate_content"
   )) throw new Error("Invalid model API resolution");
   return { provider: result.provider, api };
 }

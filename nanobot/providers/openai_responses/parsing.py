@@ -8,7 +8,13 @@ from typing import Any, AsyncGenerator, cast
 import httpx
 from loguru import logger
 
-from nanobot.providers.base import LLMResponse, LLMUsage, ToolCallRequest, parse_tool_arguments
+from nanobot.providers.base import (
+    LLMResponse,
+    LLMUsage,
+    ModelCommentary,
+    ToolCallRequest,
+    parse_tool_arguments,
+)
 from nanobot.providers.openai_responses.state import (
     REPLAYABLE_FINISH_REASONS,
     attach_responses_state,
@@ -294,6 +300,25 @@ def _extract_refusal_text_from_output(output: object) -> tuple[bool, str]:
     return refusal_seen, "".join(parts)
 
 
+def _is_commentary(item: dict[str, Any]) -> bool:
+    return item.get("type") == "message" and item.get("phase") == "commentary"
+
+
+def extract_commentary(output: list[dict[str, Any]]) -> tuple[ModelCommentary, ...]:
+    commentary: list[ModelCommentary] = []
+    for item in output:
+        if not _is_commentary(item) or item.get("status") not in (None, "completed"):
+            continue
+        text = "".join(
+            part for block in _response_object_list(item.get("content"))
+            if block.get("type") == "output_text" and isinstance(part := block.get("text"), str)
+        ).strip()
+        if text:
+            item_id = item.get("id")
+            commentary.append(ModelCommentary(text, item_id if isinstance(item_id, str) else None))
+    return tuple(commentary)
+
+
 async def iter_sse(response: httpx.Response) -> AsyncGenerator[dict[str, Any], None]:
     """Yield parsed JSON events from a Responses API SSE stream."""
     buffer: list[str] = []
@@ -375,7 +400,8 @@ async def consume_responses_events(
     capture: ResponsesStreamCapture | None = None,
 ) -> tuple[str, list[ToolCallRequest], str, LLMUsage | None, str | None]:
     """Consume the Responses event protocol independently of its transport."""
-    content = ""
+    content_parts: list[tuple[int | None, str]] = []
+    commentary_indexes: set[int] = set()
     tool_calls: list[ToolCallRequest] = []
     tool_call_buffers: dict[str, dict[str, Any]] = {}
     tool_call_ids: dict[str, str] = {}
@@ -392,12 +418,17 @@ async def consume_responses_events(
         if on_response_event:
             await on_response_event(event)
         event_type = event.get("type")
+        output_index = event.get("output_index")
+        if not isinstance(output_index, int):
+            output_index = None
         if on_tool_call_delta and (
             hosted_event := _hosted_web_search_event(event, event_type)
         ):
             await on_tool_call_delta(hosted_event)
         if event_type == "response.output_item.added":
             item = _as_json_object(event.get("item")) or {}
+            if output_index is not None and _is_commentary(item):
+                commentary_indexes.add(output_index)
             if item.get("type") == "function_call":
                 call_id = item.get("call_id")
                 if not call_id:
@@ -419,9 +450,10 @@ async def consume_responses_events(
                     })
         elif event_type == "response.output_text.delta":
             delta_text = event.get("delta") or ""
-            content += delta_text
-            if on_content_delta and delta_text:
-                await on_content_delta(delta_text)
+            if output_index not in commentary_indexes:
+                content_parts.append((output_index, delta_text))
+                if on_content_delta and delta_text:
+                    await on_content_delta(delta_text)
         elif event_type == "response.refusal.delta":
             refusal_seen = True
             delta_text = event.get("delta")
@@ -431,7 +463,7 @@ async def consume_responses_events(
                     event.get("content_index"),
                 )
                 refusal_deltas[key] = refusal_deltas.get(key, "") + delta_text
-                content += delta_text
+                content_parts.append((None, delta_text))
                 emitted_refusal_text += delta_text
                 if on_content_delta:
                     await on_content_delta(delta_text)
@@ -445,7 +477,7 @@ async def consume_responses_events(
             streamed_text = refusal_deltas.pop(key, "")
             if isinstance(refusal_text, str) and refusal_text:
                 remaining_text = _remaining_refusal_text(streamed_text, refusal_text)
-                content += remaining_text
+                content_parts.append((None, remaining_text))
                 emitted_refusal_text += remaining_text
                 if on_content_delta and remaining_text:
                     await on_content_delta(remaining_text)
@@ -510,7 +542,9 @@ async def consume_responses_events(
         elif event_type == "response.output_item.done":
             item = _as_json_object(event.get("item")) or {}
             if capture is not None:
-                capture.record_output_item(event.get("output_index"), item)
+                capture.record_output_item(output_index, item)
+            if output_index is not None and _is_commentary(item):
+                commentary_indexes.add(output_index)
             if item.get("type") == "function_call":
                 call_id = item.get("call_id")
                 if not call_id:
@@ -543,6 +577,10 @@ async def consume_responses_events(
                         await on_reasoning_delta(summary)
         elif event_type in {"response.completed", "response.incomplete"}:
             response_obj = _response_object(event.get("response")) or {}
+            commentary_indexes.update(
+                index for index, item in enumerate(_response_object_list(response_obj.get("output")))
+                if _is_commentary(item)
+            )
             if capture is not None:
                 capture.record_completed(response_obj)
             finish_reason = _response_finish_reason(
@@ -559,7 +597,7 @@ async def consume_responses_events(
                     emitted_refusal_text,
                     terminal_refusal_text,
                 )
-                content += remaining_text
+                content_parts.append((None, remaining_text))
                 emitted_refusal_text += remaining_text
                 if on_content_delta and remaining_text:
                     await on_content_delta(remaining_text)
@@ -578,6 +616,7 @@ async def consume_responses_events(
         raise ConnectionError("Model stream ended before a terminal response event was received")
     if refusal_seen:
         finish_reason = "refusal"
+    content = "".join(part for index, part in content_parts if index not in commentary_indexes)
     return content, tool_calls, finish_reason, usage, reasoning_content
 
 
@@ -626,7 +665,7 @@ def parse_response_output(
         if item_type == "message":
             for block in _response_object_list(item.get("content")):
                 block_type = block.get("type")
-                if block_type == "output_text":
+                if block_type == "output_text" and not _is_commentary(item):
                     text = block.get("text")
                     if isinstance(text, str):
                         content_parts.append(text)
@@ -661,6 +700,7 @@ def parse_response_output(
         finish_reason=finish_reason,
         usage=usage,
         reasoning_content=reasoning_content if isinstance(reasoning_content, str) else None,
+        commentary=extract_commentary(output),
     )
     if (
         state_provider is not None

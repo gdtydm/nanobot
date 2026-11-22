@@ -20,6 +20,10 @@ async def responses_peer():
         "type": "reasoning", "id": "rs_1", "encrypted_content": "opaque-reasoning",
         "summary": [{"type": "summary_text", "text": "thinking"}],
     }
+    commentary = {
+        "type": "message", "id": "msg_1", "role": "assistant", "phase": "commentary", "status": "completed",
+        "content": [{"type": "output_text", "text": "I’ll read the report.", "annotations": []}],
+    }
     call = {
         "type": "function_call", "id": "fc_1", "call_id": "call_1",
         "name": "read_file", "arguments": '{"path":"report.pdf"}', "status": "completed",
@@ -28,7 +32,7 @@ async def responses_peer():
     async def handle(request):
         body = await request.json()
         requests.append((request.path, dict(request.headers), body))
-        output = [reasoning, call] if len(requests) == 1 else [{
+        output = [reasoning, commentary, call] if len(requests) == 1 else [{
             "type": "message", "id": "msg_2", "role": "assistant", "status": "completed",
             "content": [{"type": "output_text", "text": "report read", "annotations": []}],
         }]
@@ -48,12 +52,17 @@ async def responses_peer():
                  "summary_index": 0, "delta": "thinking"},
                 {"type": "response.output_item.done", "output_index": 0, "item": reasoning},
                 {"type": "response.output_item.added", "output_index": 1,
+                 "item": {**commentary, "content": [], "status": "in_progress"}},
+                {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 1,
+                 "delta": "I’ll read the report."},
+                {"type": "response.output_item.done", "output_index": 1, "item": commentary},
+                {"type": "response.output_item.added", "output_index": 2,
                  "item": {**call, "arguments": "", "status": "in_progress"}},
                 {"type": "response.function_call_arguments.delta", "item_id": "fc_1",
-                 "output_index": 1, "delta": call["arguments"]},
+                 "output_index": 2, "delta": call["arguments"]},
                 {"type": "response.function_call_arguments.done", "item_id": "fc_1",
-                 "output_index": 1, "arguments": call["arguments"]},
-                {"type": "response.output_item.done", "output_index": 1, "item": call},
+                 "output_index": 2, "arguments": call["arguments"]},
+                {"type": "response.output_item.done", "output_index": 2, "item": call},
             ])
         else:
             events.append({"type": "response.output_text.delta", "delta": "report read"})
@@ -105,6 +114,7 @@ async def test_adapters_replay_tool_results_and_reasoning(responses_peer, monkey
         )
     progress = []
     thinking = []
+    content = []
 
     async def on_tool(event):
         progress.append(event)
@@ -112,8 +122,13 @@ async def test_adapters_replay_tool_results_and_reasoning(responses_peer, monkey
     async def on_thinking(delta):
         thinking.append(delta)
 
+    async def on_content(delta):
+        content.append(delta)
+
     call = provider.chat_stream if streaming else provider.chat
-    callbacks = {"on_tool_call_delta": on_tool, "on_thinking_delta": on_thinking} if streaming else {}
+    callbacks = {
+        "on_tool_call_delta": on_tool, "on_thinking_delta": on_thinking, "on_content_delta": on_content,
+    } if streaming else {}
     messages = [{"role": "system", "content": "You are nanobot."}, {"role": "user", "content": "Read report.pdf"}]
     tools = [{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}}]
     try:
@@ -122,6 +137,8 @@ async def test_adapters_replay_tool_results_and_reasoning(responses_peer, monkey
         assert first.tool_calls[0].name == "read_file"
         assert first.tool_calls[0].arguments == {"path": "report.pdf"}
         assert first.reasoning_content == "thinking"
+        assert not first.content
+        assert [(item.id, item.text) for item in first.commentary] == [("msg_1", "I’ll read the report.")]
         assert first.usage.total_tokens == 15
         assert first.provider_state is not None
         tool_result = {"role": "tool", "tool_call_id": first.tool_calls[0].id, "content": "PDF extracted text"}
@@ -140,14 +157,17 @@ async def test_adapters_replay_tool_results_and_reasoning(responses_peer, monkey
         assert body["store"] is (adapter == "openai")
         assert body["input"][0]["content"][0]["text"] == "Read report.pdf"
         assert body["input"][1]["encrypted_content"] == "opaque-reasoning"
-        assert body["input"][2]["call_id"] == "call_1"
-        assert body["input"][3] == {"type": "function_call_output", "call_id": "call_1", "output": "PDF extracted text"}
+        assert body["input"][2]["phase"] == "commentary"
+        assert body["input"][2]["content"][0]["text"] == "I’ll read the report."
+        assert body["input"][3]["call_id"] == "call_1"
+        assert body["input"][4] == {"type": "function_call_output", "call_id": "call_1", "output": "PDF extracted text"}
         assert body["tools"][0]["name"] == "read_file"
         if adapter == "copilot":
             assert body["model"] == "gpt-5.4-mini"
             assert requests[0][1]["Authorization"] == "Bearer copilot-fixture"
         if streaming:
             assert thinking == ["thinking"]
+            assert content == ["report read"]
             assert any(event.get("arguments_delta") == '{"path":"report.pdf"}' for event in progress)
             assert progress[-1]["call_id"] == "call_1"
     finally:

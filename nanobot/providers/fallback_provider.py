@@ -192,6 +192,12 @@ class FallbackProvider(LLMProvider):
     def supports_pre_request_compaction(self, model: str | None = None) -> bool:
         return self._primary.supports_pre_request_compaction(model)
 
+    def supports_commentary(
+        self, model: str | None = None, reasoning_effort: str | None = None,
+    ) -> bool:
+        # Backup providers are constructed on demand and can use different APIs.
+        return not self._has_fallbacks and self._primary.supports_commentary(model, reasoning_effort)
+
     def _primary_call_context(
         self,
         provider_context: ProviderCallContext,

@@ -25,6 +25,7 @@ from nanobot.providers.openai_responses.converters import convert_tools
 from nanobot.providers.openai_responses.parsing import (
     ResponsesStreamCapture,
     consume_responses_events,
+    extract_commentary,
     iter_sdk_events,
     iter_sse,
     parse_response_output,
@@ -230,15 +231,17 @@ class ResponsesBackend:
             on_reasoning_delta=on_thinking_delta, on_response_event=on_response_event,
             capture=capture,
         )
+        output_items = capture.output_items
         result = LLMResponse(
             content=content, tool_calls=tools, finish_reason=finish,
             usage=usage, reasoning_content=reasoning,
+            commentary=extract_commentary(output_items),
         )
         if capture.completed and provider is not None and body is not None:
             attach_responses_state(
                 result, provider=provider, model=str(body.get("model") or ""),
                 input_items=cast(list[dict[str, Any]], body.get("input") or []),
-                output_items=capture.output_items,
+                output_items=output_items,
             )
         return result
 
