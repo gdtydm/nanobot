@@ -1091,6 +1091,7 @@
       "maxTokens": "輸出 Token 上限",
       "temperature": "溫度",
       "reasoningEffort": "推理強度",
+      "defaultReasoningEffort": "預設（{{effort}}）",
       "convertTitle": "轉換設定",
       "convertHelp": "將主模型和備用模型轉為預設",
       "converting": "正在轉換…",
@@ -1603,6 +1604,8 @@
       }
     },
     "oauth": {
+      "completeBrowserSignIn": "在瀏覽器完成登入後，此視窗會自動更新。",
+      "cliproxyapiSetupHelp": "請先設定本機的 CLIProxyAPI 服務。",
       "deviceCode": "裝置碼",
       "deviceCodeHelp": "複製此裝置碼，前往 GitHub 輸入並授權。完成後此視窗會自動更新。",
       "waitingForDeviceApproval": "等待 GitHub 授權…",

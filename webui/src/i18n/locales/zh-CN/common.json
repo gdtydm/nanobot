@@ -914,6 +914,7 @@
       "maxTokens": "输出 Token 上限",
       "temperature": "温度",
       "reasoningEffort": "推理强度",
+      "defaultReasoningEffort": "默认（{{effort}}）",
       "convertTitle": "转换设置",
       "convertHelp": "将主模型和备用模型转为预设",
       "converting": "正在转换...",
@@ -1785,6 +1786,8 @@
       }
     },
     "oauth": {
+      "completeBrowserSignIn": "在浏览器中完成登录，此窗口会自动更新。",
+      "cliproxyapiSetupHelp": "请先配置本机的 CLIProxyAPI 服务。",
       "deviceCode": "设备码",
       "deviceCodeHelp": "复制此设备码，前往 GitHub 输入并授权。完成后此窗口会自动更新。",
       "waitingForDeviceApproval": "等待 GitHub 授权…",

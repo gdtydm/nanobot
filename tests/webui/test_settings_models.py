@@ -81,6 +81,99 @@ def test_antigravity_webui_login_pasted_callback_and_logout(tmp_path, monkeypatc
         registry.close()
 
 
+@pytest.mark.parametrize("remote", [False, True])
+def test_cliproxyapi_webui_delegates_antigravity_login(monkeypatch, remote):
+    from nanobot.providers import cliproxyapi_oauth
+    from nanobot.webui.settings_models import (
+        complete_oauth_provider,
+        login_oauth_provider,
+        oauth_provider_status,
+    )
+    from nanobot.webui.settings_services import WebUIOAuthFlowRegistry
+
+    authenticated = False
+
+    def request(key, method, path, *, params=None, json=None):
+        nonlocal authenticated
+        assert key == "management-fixture"
+        if method == "GET" and path == "/oauth/auth-url":
+            assert params == {"provider": "antigravity", "is_webui": "true"}
+            return {
+                "status": "ok", "url": "https://accounts.google.com/o/oauth2/v2/auth?state=fixture",
+                "state": "fixture",
+            }
+        if method == "POST" and path == "/oauth/callback":
+            assert json == {"provider": "antigravity", "redirect_url": callback}
+            authenticated = True
+            return {"status": "ok"}
+        if method == "GET" and path == "/oauth/status":
+            assert params == {"state": "fixture"}
+            return {"status": "ok" if authenticated else "wait"}
+        assert method == "GET" and path == "/credentials"
+        return {"files": [{"provider": "antigravity", "disabled": False}] if authenticated else []}
+
+    monkeypatch.setenv("NANOBOT_CLIPROXYAPI_MANAGEMENT_KEY", "management-fixture")
+    monkeypatch.setattr(cliproxyapi_oauth, "_request", request)
+    config = Config()
+    config.providers.cliproxyapi.api_key = "gateway-fixture"
+    callback = "http://localhost:51121/oauth-callback?code=fixture-code&state=fixture"
+    login_query = {"provider": ["cliproxyapi"], "remote_browser": ["true" if remote else "false"]}
+    registry = WebUIOAuthFlowRegistry()
+    try:
+        started = login_oauth_provider(config, login_query, oauth_flows=registry, config_path=None)
+        assert started["completion_input"] == ("callback_url" if remote else "poll")
+        query = {"provider": ["cliproxyapi"], "flow_id": [started["flow_id"]]}
+        kwargs = {
+            "oauth_flows": registry, "config_path": None,
+            "settings_payload": lambda **_: oauth_provider_status(find_by_name("cliproxyapi")),
+        }
+        assert complete_oauth_provider(query, **kwargs)["status"] == "pending"
+        if not remote:
+            authenticated = True
+        result = complete_oauth_provider(query, callback if remote else None, **kwargs)
+        assert result["configured"] is True
+    finally:
+        registry.close()
+
+
+def test_cliproxyapi_model_catalog_preserves_ids_and_uses_proxy_effort_definitions(monkeypatch):
+    from nanobot.providers import cliproxyapi_oauth
+
+    neon = "gemini-4-neon-xhigh"
+    opus = "claude-opus-5-5-high"
+    tiered = "gemini-3.8-flash-tiered"
+    unavailable = "gemini-4-carbon-high"
+    config = Config()
+    config.providers.cliproxyapi.api_key = "gateway-fixture"
+    monkeypatch.setenv("NANOBOT_CLIPROXYAPI_MANAGEMENT_KEY", "management-fixture")
+
+    def management_request(key, method, path):
+        assert (key, method, path) == ("management-fixture", "GET", "/routing/model-definitions/antigravity")
+        return {"models": [
+            {"id": neon, "display_name": "Gemini 4 Neon", "thinking": {"levels": ["low", "medium", "high", "xhigh"]}},
+            {"id": opus, "display_name": "Claude Opus 5.5 (High)", "thinking": {"levels": ["low", "medium", "high"]}},
+            {"id": tiered, "display_name": "Gemini 3.8 Flash (Tiered)", "thinking": {"levels": ["low", "high"]}},
+            {"id": unavailable, "display_name": "Gemini 4 Carbon"},
+        ]}
+
+    def http_get(url, *, headers, **kwargs):
+        assert url == "http://127.0.0.1:8317/v1/models"
+        assert headers["Authorization"] == "Bearer gateway-fixture"
+        return httpx.Response(200, json={"data": [{"id": model} for model in (neon, opus, tiered)]},
+                              request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(cliproxyapi_oauth, "_request", management_request)
+    result = provider_models_payload(config, {"provider": ["cliproxyapi"]}, http_get=http_get)
+    models = result["models"]
+    assert [row["id"] for row in models] == [neon, opus, tiered]
+    assert models[0]["label"] == "Gemini 4 Neon"
+    assert models[0]["reasoning_efforts"] == ["low", "medium", "high", "xhigh"]
+    assert models[0]["default_reasoning_effort"] == "xhigh"
+    assert models[0]["reasoning_family"] == "gemini-4-neon"
+    assert models[1]["label"] == "Claude Opus 5.5"
+    assert models[2]["label"] == "Gemini 3.8 Flash (Tiered)"
+
+
 def test_preset_request_overrides_redact_roundtrip_and_clear():
     config = Config()
     config.providers.openai.api_key = "fixture"

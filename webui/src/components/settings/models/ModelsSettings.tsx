@@ -322,8 +322,12 @@ export function ModelsSettings({
 
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
   const selectedProvider = settings.providers.find((provider) => provider.name === form.provider);
+  const proxyAntigravity = creating
+    ? settings.providers.find((provider) => provider.name === "cliproxyapi" && provider.oauth_login_supported)
+    : undefined;
   const selectableProviders = uniqueProviders([
     ...configuredProviders,
+    ...(proxyAntigravity ? [proxyAntigravity] : []),
     ...(selectedProvider ? [selectedProvider] : []),
   ]);
   const showAutoProvider = selectedPreset?.provider === "auto" || form.provider === "auto";
@@ -345,6 +349,8 @@ export function ModelsSettings({
       ...prev,
       provider,
       model: provider === prev.provider ? prev.model : "",
+      reasoningEffort: creating && provider === "cliproxyapi" && provider !== prev.provider
+        ? "" : prev.reasoningEffort,
       api: provider === prev.provider ? prev.api : null,
       extraHeaders: provider === prev.provider ? prev.extraHeaders : "",
       extraQuery: provider === prev.provider ? prev.extraQuery : "",
@@ -528,8 +534,9 @@ export function ModelsSettings({
             const canSuggestName =
               creating &&
               (!form.modelPreset.trim() || form.modelPreset === suggestedPresetNameRef.current);
+            const modelName = form.provider === "cliproxyapi" ? info?.label ?? model : model;
             const suggestion = canSuggestName
-              ? suggestedPresetName(model, settings.model_presets)
+              ? suggestedPresetName(modelName, settings.model_presets)
               : "";
             if (canSuggestName) suggestedPresetNameRef.current = suggestion;
             setForm((prev) => ({

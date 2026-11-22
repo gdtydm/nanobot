@@ -1091,6 +1091,7 @@
       "maxTokens": "최대 출력 토큰",
       "temperature": "온도",
       "reasoningEffort": "추론 강도",
+      "defaultReasoningEffort": "기본값 ({{effort}})",
       "convertTitle": "설정 변환",
       "convertHelp": "주 모델과 대체 모델을 프리셋으로 변환하세요.",
       "converting": "변환 중...",
@@ -1603,6 +1604,8 @@
       }
     },
     "oauth": {
+      "completeBrowserSignIn": "브라우저에서 로그인을 완료하세요. 이 창은 자동으로 갱신됩니다.",
+      "cliproxyapiSetupHelp": "로그인하기 전에 로컬 CLIProxyAPI 서비스를 설정하세요.",
       "deviceCode": "기기 코드",
       "deviceCodeHelp": "이 코드를 복사하여 GitHub에 입력하고 인증하세요. 완료되면 이 창이 자동으로 업데이트됩니다.",
       "waitingForDeviceApproval": "GitHub 인증을 기다리는 중…",

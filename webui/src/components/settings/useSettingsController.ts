@@ -160,7 +160,7 @@ export function useSettingsController({
   const closeProviderOAuthFlow = useCallback((cancelPending = true) => {
     const flow = providerOAuthFlowRef.current;
     providerOAuthFlowRef.current = null;
-    if (cancelPending && flow?.completion_input === "device_code") {
+    if (cancelPending && flow && (flow.completion_input === "device_code" || flow.provider === "cliproxyapi")) {
       void cancelProviderOAuth(client, flow.provider, flow.flow_id).catch(() => {});
     }
     setProviderOAuthFlow(null);

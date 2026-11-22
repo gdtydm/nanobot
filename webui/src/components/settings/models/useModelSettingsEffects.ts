@@ -72,7 +72,7 @@ export function useProviderOAuthPolling({
     return () => {
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
-      if (providerOAuthFlow.completion_input === "device_code"
+      if ((providerOAuthFlow.completion_input === "device_code" || providerOAuthFlow.provider === "cliproxyapi")
         && providerOAuthFlowRef.current?.flow_id === providerOAuthFlow.flow_id) {
         providerOAuthFlowRef.current = null;
         void cancelProviderOAuth(client, providerOAuthFlow.provider, providerOAuthFlow.flow_id)

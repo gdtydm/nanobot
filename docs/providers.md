@@ -673,6 +673,14 @@ The model list comes from the signed-in account and includes supported Gemini an
 
 The adapter follows Antigravity's internal Cloud Code protocol, using the [CLIProxyAPI implementation](https://github.com/router-for-me/CLIProxyAPI/tree/6960763455c4ac3d4828fb1736aa5de2183ccecf) as a reference. Google may change the client-version and authorization contract independently of nanobot. A client-version rejection asks you to update nanobot; it is never displayed as a successful model answer. A 403 requires checking account access or completing Google's account setup. Subscription model access and limits remain controlled by Google.
 
+### Antigravity via CLIProxyAPI
+
+Install CLIProxyAPI v8 as an optional system dependency. On macOS, run `brew bundle --file=Brewfile.cliproxyapi` from this checkout. On other platforms, use the [CLIProxyAPI installation guide](https://help.router-for.me/introduction/quick-start). Run it on the gateway machine at `127.0.0.1:8317` with its v8 management API enabled for localhost.
+
+Set `providers.cliproxyapi.apiKey` to a CLIProxyAPI access key, which you can reference from the process environment. Provide the separate management key through `NANOBOT_CLIPROXYAPI_MANAGEMENT_KEY` or the active NanoBot instance's private `auth/cliproxyapi-management.key` file. Keep both keys on the gateway host.
+
+In **Settings → Models → Manage providers**, choose **Antigravity (CLIProxyAPI)** and select **Sign in**. The browser opens Google authorization, and CLIProxyAPI saves and manages the resulting Google tokens. When using a browser on another machine, paste the complete localhost callback URL into the dialog to finish sign-in. Select an available model from the proxy's catalog in a model preset. Manage signed-in accounts from CLIProxyAPI.
+
 #### Other OAuth providers
 
 Some providers do not use API keys in `config.json`.

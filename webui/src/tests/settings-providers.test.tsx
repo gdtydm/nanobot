@@ -73,6 +73,84 @@ describe("Settings providers", () => {
     }
   });
 
+  it("opens and polls CLIProxyAPI sign-in without a client credentials form", async () => {
+    const happyWindow = window as typeof window & { happyDOM: { setURL: (url: string) => void } };
+    const originalUrl = window.location.href;
+    happyWindow.happyDOM.setURL("http://localhost:18887/#/settings?section=models");
+    try {
+      const payload = settingsPayload();
+      const provider = {
+        name: "cliproxyapi", label: "Antigravity (CLIProxyAPI)", configured: false,
+        auth_type: "oauth" as const, api_key_required: false, oauth_login_supported: true,
+        oauth_logout_supported: false,
+      };
+      payload.providers = [provider];
+      vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(payload)));
+      const authorizationUrl = "https://accounts.google.com/o/oauth2/v2/auth?state=fixture";
+      requestMutationMock.mockImplementation(async (action: string) => {
+        if (action === "settings.provider.oauth_login") {
+          return {
+            status: "authorization_required", provider: provider.name, flow_id: "proxy-flow",
+            authorization_url: authorizationUrl, expires_in: 600, completion_input: "poll",
+          };
+        }
+        return { ...payload, providers: [{ ...provider, configured: true }] };
+      });
+      const popup = { closed: false, opener: window, location: { href: "about:blank" } };
+      const open = vi.fn(() => popup);
+      vi.stubGlobal("open", open);
+      renderProviderManager({ initialSection: "models", initialSettings: payload });
+      await chooseProviderToConfigure(provider.label);
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+      expect(await screen.findByText("Complete sign-in in your browser. This window updates automatically.")).toBeVisible();
+      expect(popup.location.href).toBe(authorizationUrl);
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+      await waitFor(() => expect(requestMutationMock).toHaveBeenCalledWith(
+        "settings.provider.oauth_complete", { provider: provider.name, flow_id: "proxy-flow" }, 20_000,
+      ), { timeout: 3000 });
+      expect(await screen.findByRole("button", { name: "Sign in again" })).toBeVisible();
+    } finally {
+      happyWindow.happyDOM.setURL(originalUrl);
+    }
+  });
+
+  it.each([true, false])("offers CLIProxyAPI when adding a provider to a new preset (signed in: %s)", async (configured) => {
+    const user = userEvent.setup();
+    const payload = settingsPayload();
+    const proxyLabel = "Antigravity (CLIProxyAPI)";
+    payload.providers = [
+      { name: "openai", label: "OpenAI", configured: true },
+      { name: "antigravity", label: "Antigravity", configured: false,
+        auth_type: "oauth", oauth_login_supported: true },
+      { name: "cliproxyapi", label: proxyLabel, configured, auth_type: "oauth", oauth_login_supported: true },
+    ];
+    renderSettingsView({ initialSection: "models", initialSettings: payload });
+    await user.click(screen.getByRole("button", { name: "New preset" }));
+    const preset = await screen.findByRole("dialog", { name: "New preset" });
+    const name = within(preset).getByRole("textbox", { name: "Preset name" });
+    await user.type(name, "Neon test");
+    const providerPicker = within(preset).getByRole("combobox", { name: "OpenAI" });
+    await user.click(providerPicker);
+    expect(screen.getByRole("option", { name: proxyLabel })).toBeVisible();
+    await user.click(screen.getByRole("option", { name: "Add provider" }));
+    const picker = await screen.findByRole("dialog", { name: "Add provider" });
+    const search = within(picker).getByRole("combobox", { name: "Search providers" });
+    await user.type(search, "Antigravity");
+    const choices = within(picker).getAllByRole("option");
+    expect(choices).toHaveLength(1);
+    expect(choices[0]).toHaveAccessibleName(proxyLabel);
+    await user.click(choices[0]);
+    if (configured) {
+      expect(providerPicker).toHaveTextContent(proxyLabel);
+      expect(name).toHaveValue("Neon test");
+    } else {
+      const settings = await screen.findByRole("dialog", { name: proxyLabel });
+      expect(within(settings).getByRole("button", { name: "Sign in" })).toBeEnabled();
+    }
+    expect(requestMutationMock).not.toHaveBeenCalled();
+  });
+
   it("manages providers unused by presets and returns focus through the manager", async () => {
     const user = userEvent.setup();
     const payload = settingsPayload();

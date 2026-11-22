@@ -734,6 +734,7 @@
       "maxTokens": "Máx. de tokens de saída",
       "temperature": "Temperatura",
       "reasoningEffort": "Esforço de raciocínio",
+      "defaultReasoningEffort": "Padrão ({{effort}})",
       "convertTitle": "Converter ajustes",
       "convertHelp": "Converta os modelos principal e alternativo em presets.",
       "converting": "Convertendo...",
@@ -1605,6 +1606,8 @@
       }
     },
     "oauth": {
+      "completeBrowserSignIn": "Conclua o login no navegador. Esta janela será atualizada automaticamente.",
+      "cliproxyapiSetupHelp": "Configure o serviço local CLIProxyAPI antes de fazer login.",
       "deviceCode": "Código do dispositivo",
       "deviceCodeHelp": "Copie este código e insira-o no GitHub. Esta janela será atualizada automaticamente após a autorização.",
       "waitingForDeviceApproval": "Aguardando autorização do GitHub…",

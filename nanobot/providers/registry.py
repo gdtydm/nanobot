@@ -662,6 +662,17 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefixes=("antigravity",),
     ),
     ProviderSpec(
+        name="cliproxyapi",
+        keywords=("cliproxyapi",),
+        env_key="",
+        request_apis=("chat_completions",),
+        display_name="Antigravity (CLIProxyAPI)",
+        default_api_base="http://127.0.0.1:8317/v1",
+        model_catalog="local",
+        is_oauth=True,
+        strip_model_prefixes=("cliproxyapi",),
+    ),
+    ProviderSpec(
         name="gemini",
         keywords=("gemini", "gemma"),
         env_key="GEMINI_API_KEY",

@@ -1950,6 +1950,57 @@ describe("Settings models", () => {
     );
   });
 
+  it("uses one display name and keeps the CLIProxyAPI model ID when saving an effort", async () => {
+    const base = settingsPayload();
+    const provider = "cliproxyapi";
+    const model = "gemini-4-neon-xhigh";
+    const payload: SettingsPayload = {
+      ...base,
+      agent: { ...base.agent, model, provider, resolved_provider: provider },
+      model_presets: [
+        { ...base.model_presets[0], model, provider, reasoning_effort: "high" },
+      ],
+      providers: [{
+        name: provider, label: "Antigravity (CLIProxyAPI)", configured: true,
+        auth_type: "oauth", oauth_login_supported: true, model_catalog: "local",
+      }],
+    };
+    const target = "/api/settings/provider-models?provider=cliproxyapi";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => String(input) === target
+      ? jsonResponse({
+        provider, status: "available", catalog_kind: "local", model_count: 3,
+        models: [
+          { id: model, label: "Gemini 4 Neon", reasoning_family: "gemini-4-neon",
+            reasoning_efforts: ["low", "medium", "high", "xhigh"], default_reasoning_effort: "xhigh" },
+          { id: "gemini-4-neon-high", label: "Gemini 4 Neon", reasoning_family: "gemini-4-neon",
+            reasoning_efforts: ["low", "medium", "high", "xhigh"], default_reasoning_effort: "high" },
+          { id: "gemini-4-argon-high", label: "Gemini 4 Argon" },
+        ],
+      })
+      : String(input) === "/api/settings" ? jsonResponse(payload) : new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    requestMutationMock.mockResolvedValue(payload);
+
+    renderSettingsView({ initialSection: "models", initialSettings: payload });
+    fireEvent.click(screen.getByRole("button", { name: "New preset" }));
+    await openModelPicker();
+
+    expect(await screen.findByRole("option", { name: "Gemini 4 Argon" })).toBeVisible();
+    fireEvent.click(screen.getByRole("option", { name: "Gemini 4 Neon" }));
+    expect(screen.getByRole("combobox", { name: "Select model" })).toHaveValue("Gemini 4 Neon");
+    const effort = screen.getByRole("combobox", { name: "Reasoning effort" });
+    expect(effort).toHaveValue("");
+    expect(effort).toHaveAttribute("placeholder", "Default (xhigh)");
+    fireEvent.click(effort);
+    expect(screen.getByRole("option", { name: "Default (xhigh)" })).toBeVisible();
+    fireEvent.click(screen.getByRole("option", { name: "medium" }));
+    fireEvent.click(presetSaveButton());
+    await waitFor(() => expect(requestMutationMock).toHaveBeenCalledWith(
+      "settings.model_configuration.create",
+      expect.objectContaining({ model, provider, reasoning_effort: "medium" }), expect.any(Number),
+    ));
+  });
+
   it("loads hybrid online models for configured OAuth providers", async () => {
     const base = settingsPayload();
     const payload: SettingsPayload = {

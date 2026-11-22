@@ -31,7 +31,12 @@ export function ReasoningEffortPicker({ token, provider, model, savedValues, val
     provider: provider?.name ?? "",
     enabled: open && !!model && !!provider?.configured && provider.model_catalog !== "unsupported",
   });
-  const efforts = payload?.models.find((entry) => entry.id === model)?.reasoning_efforts ?? savedValues ?? [];
+  const modelInfo = payload?.models.find((entry) => entry.id === model);
+  const efforts = modelInfo?.reasoning_efforts ?? savedValues ?? [];
+  const defaultEffort = provider?.name === "cliproxyapi" ? modelInfo?.default_reasoning_effort : undefined;
+  const defaultLabel = defaultEffort
+    ? t("settings.models.defaultReasoningEffort", { effort: defaultEffort })
+    : t("settings.values.default");
   const values = [DEFAULT_VALUE, ...new Set(efforts.filter(Boolean))];
   const close = () => { restoreFocus.current = true; setOpen(false); };
   const navigation = useComboboxNavigation({
@@ -50,7 +55,7 @@ export function ReasoningEffortPicker({ token, provider, model, savedValues, val
             {...navigation.inputProps}
             aria-label={t("settings.models.reasoningEffort")}
             value={value}
-            placeholder={t("settings.values.default")}
+            placeholder={defaultLabel}
             autoComplete="off"
             autoCapitalize="none"
             spellCheck={false}
@@ -97,7 +102,7 @@ export function ReasoningEffortPicker({ token, provider, model, savedValues, val
           {values.map((effort) => (
             <ComboboxOption key={effort} {...navigation.getOptionProps(effort)}
               className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]">
-              <span>{effort === DEFAULT_VALUE ? t("settings.values.default") : effort}</span>
+              <span>{effort === DEFAULT_VALUE ? defaultLabel : effort}</span>
               {effort === (value || DEFAULT_VALUE) ? <Check className="h-4 w-4" aria-hidden /> : null}
             </ComboboxOption>
           ))}

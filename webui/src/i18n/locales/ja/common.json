@@ -1091,6 +1091,7 @@
       "maxTokens": "最大出力トークン",
       "temperature": "温度",
       "reasoningEffort": "推論の強度",
+      "defaultReasoningEffort": "既定（{{effort}}）",
       "convertTitle": "設定を変換",
       "convertHelp": "主モデルと予備モデルをプリセットに変換します。",
       "converting": "変換中...",
@@ -1603,6 +1604,8 @@
       }
     },
     "oauth": {
+      "completeBrowserSignIn": "ブラウザーでログインを完了してください。この画面は自動的に更新されます。",
+      "cliproxyapiSetupHelp": "ログインする前にローカルの CLIProxyAPI サービスを設定してください。",
       "deviceCode": "デバイスコード",
       "deviceCodeHelp": "このコードをコピーして GitHub で入力し、認証してください。完了すると、この画面は自動的に更新されます。",
       "waitingForDeviceApproval": "GitHub の認証を待っています…",

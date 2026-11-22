@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { DisclosureContent } from "@/components/ui/disclosure";
 import {
   ChevronDown,
@@ -190,6 +190,7 @@ export function ProviderOAuthLoginDialog({
   const { t } = useTranslation();
   const expectsCallbackUrl = flow?.completion_input === "callback_url";
   const isDeviceCode = flow?.completion_input === "device_code";
+  const isAutomatic = flow?.completion_input === "poll";
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const inputId = expectsCallbackUrl ? "provider-oauth-callback" : "provider-oauth-code";
   const inputLabel = expectsCallbackUrl
@@ -216,6 +217,8 @@ export function ProviderOAuthLoginDialog({
             <DialogDescription>
               {isDeviceCode
                 ? t("settings.oauth.deviceCodeHelp")
+                : isAutomatic
+                ? t("settings.oauth.completeBrowserSignIn")
                 : expectsCallbackUrl
                 ? remoteBrowserAccess
                   ? t("settings.oauth.remoteCallbackHelp")
@@ -262,7 +265,7 @@ export function ProviderOAuthLoginDialog({
                 </Button>
               </div>
             </div>
-          ) : <div className="space-y-2">
+          ) : isAutomatic ? null : <div className="space-y-2">
             <label
               htmlFor={inputId}
               className="block text-xs font-medium text-foreground"
@@ -305,11 +308,13 @@ export function ProviderOAuthLoginDialog({
               <ExternalLink className="mr-2 h-4 w-4" aria-hidden />
               {isDeviceCode
                 ? t("settings.oauth.openGitHub")
+                : flow?.provider === "cliproxyapi"
+                ? t("settings.oauth.signIn")
                 : expectsCallbackUrl
                 ? t("settings.oauth.openChatGPT")
                 : t("settings.oauth.signIn")}
             </Button>
-            {!isDeviceCode ? <Button type="submit" disabled={!authorizationResponse.trim() || completing}>
+            {!isDeviceCode && !isAutomatic ? <Button type="submit" disabled={!authorizationResponse.trim() || completing}>
               {completing ? t("settings.oauth.signingIn") : t("settings.oauth.finishSignIn")}
             </Button> : null}
           </DialogFooter>
@@ -591,13 +596,13 @@ export function ProvidersSettings({
     emptyCustomProviderDraft,
   );
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
-  const unconfiguredProviders = useMemo(
-    () =>
-      settings.providers.filter(
-        (provider) => !provider.configured && provider.name !== "custom",
-      ),
-    [settings.providers],
+  const proxyReady = settings.providers.some(
+    (provider) => provider.name === "cliproxyapi" && provider.oauth_login_supported,
   );
+  const addProviderChoices = settings.providers.filter((provider) => {
+    if (provider.name === "custom" || (proxyReady && provider.name === "antigravity")) return false;
+    return !provider.configured || (proxyReady && provider.name === "cliproxyapi" && Boolean(onProviderAdded));
+  });
   const customProviderSaving = providerSaving === CUSTOM_PROVIDER_CREATION_KEY;
   const selectedProvider = view.kind === "provider"
     ? settings.providers.find((provider) => provider.name === view.name)
@@ -724,6 +729,8 @@ export function ProvidersSettings({
                     <p className={oauthAuthenticated ? "text-[13px] text-foreground" : "mt-1 text-[12px] text-muted-foreground"}>
                       {oauthAuthenticated
                         ? t("settings.oauth.signedIn")
+                        : provider.name === "cliproxyapi" && !provider.oauth_login_supported
+                          ? t("settings.oauth.cliproxyapiSetupHelp")
                         : provider.name === "openai_codex" && remoteBrowserAccess
                           ? tx(
                               "settings.oauth.codexRemoteSignInHelp",
@@ -738,7 +745,7 @@ export function ProvidersSettings({
                     </p>
                   </div>
                   <div className="flex shrink-0 justify-end gap-2">
-                    {oauthAuthenticated ? (
+                    {oauthAuthenticated && provider.oauth_logout_supported !== false ? (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -1128,9 +1135,16 @@ export function ProvidersSettings({
           </div>
         </div>
       ) : view.kind === "picker" ? (
-        <ProviderSearchList providers={unconfiguredProviders} showBrandLogos={showBrandLogos}
+        <ProviderSearchList providers={addProviderChoices} showBrandLogos={showBrandLogos}
           query={providerSearch} onQueryChange={setProviderSearch}
-          onSelect={(name) => editProvider(name, true)}
+          onSelect={(name) => {
+            if (onProviderAdded && configuredProviders.some((provider) => provider.name === name)) {
+              onProviderAdded(name);
+              onClose();
+            } else {
+              editProvider(name, true);
+            }
+          }}
           onCustom={beginCustomProviderCreation} onClose={entry.kind === "manage" ? goBack : closePanel} />
       ) : (
         <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain px-5 pb-5">

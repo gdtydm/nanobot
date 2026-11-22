@@ -1091,6 +1091,7 @@
       "maxTokens": "Token đầu ra tối đa",
       "temperature": "Nhiệt độ",
       "reasoningEffort": "Mức suy luận",
+      "defaultReasoningEffort": "Mặc định ({{effort}})",
       "convertTitle": "Chuyển thiết lập",
       "convertHelp": "Chuyển mô hình chính và dự phòng thành bộ thiết lập.",
       "converting": "Đang chuyển đổi...",
@@ -1603,6 +1604,8 @@
       }
     },
     "oauth": {
+      "completeBrowserSignIn": "Hoàn tất đăng nhập trong trình duyệt. Cửa sổ này sẽ tự động cập nhật.",
+      "cliproxyapiSetupHelp": "Thiết lập dịch vụ CLIProxyAPI cục bộ trước khi đăng nhập.",
       "deviceCode": "Mã thiết bị",
       "deviceCodeHelp": "Sao chép mã này và nhập trên GitHub. Cửa sổ này sẽ tự động cập nhật sau khi ủy quyền.",
       "waitingForDeviceApproval": "Đang chờ ủy quyền GitHub…",

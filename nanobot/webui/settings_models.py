@@ -113,6 +113,7 @@ class ProviderModelMetadataPayload(TypedDict, total=False):
     output_modalities: list[str]
     reasoning_efforts: list[str]
     default_reasoning_effort: str
+    reasoning_family: str
 
 
 class ProviderModelRowPayload(ProviderModelMetadataPayload):
@@ -209,6 +210,17 @@ def oauth_provider_status(spec: Any) -> dict[str, Any]:
     if not getattr(spec, "is_oauth", False):
         return {"configured": False, "account": None, "expires_at": None, "login_supported": False}
 
+    if spec.name == "cliproxyapi":
+        from nanobot.providers.cliproxyapi_oauth import has_antigravity_login, management_key
+
+        key = management_key()
+        return {
+            "configured": bool(key and has_antigravity_login(key)),
+            "account": None,
+            "expires_at": None,
+            "login_supported": bool(key),
+        }
+
     if spec.name == "antigravity":
         from nanobot.providers.antigravity_oauth import get_antigravity_login_status
 
@@ -302,6 +314,8 @@ def provider_configured_for_settings(
     oauth_status: OAuthStatusReader,
 ) -> bool:
     if spec.is_oauth:
+        if spec.name == "cliproxyapi" and not _resolve_env_placeholders(provider_config.api_key):
+            return False
         return bool(oauth_status(spec)["configured"])
     if provider_requires_api_base(spec):
         return bool(provider_config.api_base)
@@ -413,6 +427,11 @@ def _provider_settings_row(
         row["oauth_account"] = oauth_status["account"]
         row["oauth_expires_at"] = oauth_status["expires_at"]
         row["oauth_login_supported"] = oauth_status["login_supported"]
+        if spec.name == "cliproxyapi":
+            has_api_key = bool(_resolve_env_placeholders(provider_config.api_key))
+            row["configured"] = bool(row["configured"] and has_api_key)
+            row["oauth_login_supported"] = bool(row["oauth_login_supported"] and has_api_key)
+            row["oauth_logout_supported"] = False
     return row
 
 
@@ -746,7 +765,7 @@ def provider_models_payload(
         }
 
     api_key = _resolve_env_placeholders(provider_config.api_key)
-    if provider_requires_api_key(spec) and not api_key:
+    if (provider_requires_api_key(spec) or spec.name == "cliproxyapi") and not api_key:
         return {
             **base_payload,
             "status": "not_configured",
@@ -794,6 +813,21 @@ def provider_models_payload(
             "status": "error",
             "message": f"Could not load models: {exc}",
         }
+
+    if spec.name == "cliproxyapi" and rows:
+        from nanobot.providers.cliproxyapi_oauth import antigravity_model_definitions
+
+        definitions = antigravity_model_definitions()
+        for row in rows:
+            definition = definitions.get(row["id"])
+            if definition is None:
+                continue
+            row["label"] = definition.label
+            row["reasoning_efforts"] = list(definition.reasoning_efforts)
+            if definition.default_reasoning_effort is not None:
+                row["default_reasoning_effort"] = definition.default_reasoning_effort
+            if definition.reasoning_family is not None:
+                row["reasoning_family"] = definition.reasoning_family
 
     return {
         **base_payload,
@@ -1749,6 +1783,32 @@ def login_oauth_provider(
     if spec is None or not spec.is_oauth:
         raise WebUISettingsError("unknown OAuth provider")
 
+    if spec.name == "cliproxyapi":
+        from nanobot.providers.cliproxyapi_oauth import (
+            CLIProxyAPIOAuthError,
+            CLIProxyAPIOAuthFlow,
+            management_key,
+        )
+
+        key = management_key()
+        if not key or not _resolve_env_placeholders(config.providers.cliproxyapi.api_key):
+            raise WebUISettingsError("Configure the CLIProxyAPI gateway keys before signing in.")
+        remote_value = query_first(query, "remote_browser")
+        remote = parse_bool(remote_value, "remote_browser") if remote_value is not None else False
+        flow = CLIProxyAPIOAuthFlow(key, timeout_s=_WEBUI_OAUTH_TIMEOUT_S)
+        flow_id = secrets.token_urlsafe(24)
+        oauth_flows.register(spec.name, flow_id, flow)
+        try:
+            flow.start()
+        except CLIProxyAPIOAuthError as exc:
+            oauth_flows.remove(spec.name, flow_id, flow)
+            raise WebUISettingsError(str(exc), status=502) from None
+        return {
+            "status": "authorization_required", "provider": spec.name, "flow_id": flow_id,
+            "authorization_url": flow.authorization_url, "expires_in": _WEBUI_OAUTH_TIMEOUT_S,
+            "completion_input": "callback_url" if remote else "poll",
+        }
+
     if spec.name == "openai_codex":
         try:
             from nanobot.providers.openai_codex_oauth import OpenAICodexOAuthLoginFlow
@@ -1893,7 +1953,7 @@ def complete_oauth_provider(
     provider_name = (query_first(query, "provider") or "").strip()
     flow_id = (query_first(query, "flow_id") or "").strip()
     spec = find_by_name(provider_name)
-    if spec is None or spec.name not in {"openai_codex", "xai_grok", "github_copilot", "antigravity"}:
+    if spec is None or spec.name not in {"openai_codex", "xai_grok", "github_copilot", "antigravity", "cliproxyapi"}:
         raise WebUISettingsError("OAuth completion is not supported for this provider")
     if not flow_id:
         raise WebUISettingsError("flow_id is required")
@@ -1908,7 +1968,14 @@ def complete_oauth_provider(
         return {"status": "cancelled", "provider": spec.name, "flow_id": flow_id}
 
     try:
-        if spec.name == "antigravity":
+        if spec.name == "cliproxyapi":
+            from nanobot.providers.cliproxyapi_oauth import CLIProxyAPICallbackError
+
+            try:
+                token = flow.complete(authorization_response)
+            except CLIProxyAPICallbackError as exc:
+                raise WebUISettingsError(str(exc), status=400) from exc
+        elif spec.name == "antigravity":
             from nanobot.providers.antigravity_oauth import AntigravityOAuthInputError
 
             try:

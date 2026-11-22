@@ -325,7 +325,10 @@ export function useModelSettingsActions({
     const currentProvider = primaryPreset?.provider === "auto"
       ? primaryPreset.resolved_provider ?? settings.agent.resolved_provider
       : primaryPreset?.provider ?? settings.agent.provider;
-    const provider =
+    const proxyAntigravity = currentProvider === "antigravity"
+      ? settings.providers.find((provider) => provider.name === "cliproxyapi" && provider.oauth_login_supported)
+      : undefined;
+    const provider = proxyAntigravity?.name ??
       configuredModelProviderOptions.find((option) => option.name === currentProvider)?.name ??
       configuredModelProviderOptions[0]?.name ??
       "";
@@ -345,7 +348,8 @@ export function useModelSettingsActions({
         primaryPreset?.context_window_tokens ?? settings.agent.context_window_tokens,
       ),
       temperature: primaryPreset?.temperature ?? settings.agent.temperature,
-      reasoningEffort: primaryPreset?.reasoning_effort ?? settings.agent.reasoning_effort ?? "",
+      reasoningEffort: provider === "cliproxyapi"
+        ? "" : primaryPreset?.reasoning_effort ?? settings.agent.reasoning_effort ?? "",
     }));
     setModelPresetCreating(true);
   };
@@ -519,11 +523,11 @@ export function useModelSettingsActions({
 
   const runProviderOAuth = async (providerName: string, action: "login" | "logout") => {
     if (providerSaving) return;
+    const usesCLIProxyAPI = providerName === "cliproxyapi";
     let popup: Window | null = null;
     if (
       action === "login"
-      && (providerName === "xai_grok" || providerName === "antigravity")
-      && !remoteBrowserAccess
+      && (usesCLIProxyAPI || (!remoteBrowserAccess && (providerName === "xai_grok" || providerName === "antigravity")))
     ) {
       try {
         popup = window.open("about:blank", "_blank");
@@ -539,11 +543,12 @@ export function useModelSettingsActions({
           ? await loginProviderOAuth(
               client,
               providerName,
-              (providerName === "openai_codex" || providerName === "antigravity") && remoteBrowserAccess,
+              (providerName === "openai_codex" || providerName === "antigravity" || usesCLIProxyAPI) && remoteBrowserAccess,
             )
           : await logoutProviderOAuth(client, providerName);
       if (isProviderOAuthAuthorizationRequired(payload)) {
-        if (payload.completion_input === "device_code" && !oauthMounted.current) {
+        if ((payload.completion_input === "device_code" || usesCLIProxyAPI) && !oauthMounted.current) {
+          popup?.close();
           await cancelProviderOAuth(client, payload.provider, payload.flow_id).catch(() => {});
           return;
         }

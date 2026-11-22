@@ -221,13 +221,14 @@ export function ModelIdPicker({
   const restoreInputOnClose = useRef(false);
   const effectiveProvider =
     provider === "auto" ? settings.agent.resolved_provider ?? provider : provider;
+  const usesCLIProxyAPI = effectiveProvider === "cliproxyapi";
   const hasConcreteProvider = Boolean(effectiveProvider && effectiveProvider !== "auto");
   const hasStaticModels = models !== undefined;
   const providerRow = settingsProviderRow(settings, effectiveProvider);
   const providerConfigured = settingsProviderConfigured(settings, effectiveProvider);
   const providerRequiresConfiguration =
     !hasStaticModels && hasConcreteProvider && !providerConfigured;
-  const providerHasManagedModels = ["builtin", "hybrid"].includes(
+  const providerHasManagedModels = ["builtin", "hybrid", "local"].includes(
     providerRow?.model_catalog ?? "",
   );
   const providerUsesManualModelIds =
@@ -249,7 +250,7 @@ export function ModelIdPicker({
     revision: providerRow ?? settings,
     token,
     provider: effectiveProvider,
-    enabled: open && shouldFetchModels,
+    enabled: shouldFetchModels && (open || (usesCLIProxyAPI && Boolean(value))),
   });
   const providerModels: ProviderModelsPayload["models"] = useMemo(
     () => hasStaticModels
@@ -257,16 +258,21 @@ export function ModelIdPicker({
       : (payload?.models ?? []),
     [hasStaticModels, models, payload?.models],
   );
-  const visibleModels = useMemo(
-    () => providerModels
-      .filter((model) => {
-        if (!normalizedQuery) return true;
-        return [model.id, model.label ?? "", model.description ?? "", model.owned_by ?? ""]
-          .some((field) => field.toLowerCase().includes(normalizedQuery));
-      })
-      .slice(0, 80),
-    [normalizedQuery, providerModels],
-  );
+  const visibleModels = useMemo(() => {
+    const matches = providerModels.filter((model) => {
+      if (!normalizedQuery) return true;
+      return [model.id, model.label ?? "", model.description ?? "", model.owned_by ?? ""]
+        .some((field) => field.toLowerCase().includes(normalizedQuery));
+    });
+    if (!usesCLIProxyAPI) return matches.slice(0, 80);
+    const families = new Map<string, ProviderModelsPayload["models"][number]>();
+    for (const model of matches) {
+      const family = model.reasoning_family ?? model.id;
+      if (!families.has(family) || model.id === value) families.set(family, model);
+    }
+    return [...families.values()].slice(0, 80);
+  }, [normalizedQuery, providerModels, usesCLIProxyAPI, value]);
+  const modelLabel = usesCLIProxyAPI ? providerModels.find((model) => model.id === value)?.label : undefined;
   const isCatalog = payload?.catalog_kind === "catalog";
   const waitingForModelSearch =
     open && canFetchModels && defersModelList && !hasDeferredSearchQuery;
@@ -352,7 +358,7 @@ export function ModelIdPicker({
           <span className="block truncate font-medium text-foreground">
             {model.label ?? model.id}
           </span>
-          {model.description || (model.label && model.label !== model.id) ? (
+          {!usesCLIProxyAPI && (model.description || (model.label && model.label !== model.id)) ? (
             <span className="mt-0.5 flex min-w-0 flex-wrap gap-x-2 text-[10.5px] text-muted-foreground">
               {model.label && model.label !== model.id ? <span className="truncate font-mono">{model.id}</span> : null}{" "}
               {model.description ? <span className="truncate">{model.description}</span> : null}
@@ -361,7 +367,7 @@ export function ModelIdPicker({
         </span>
       </span>
       <span className="ml-2 flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
-        {model.context_window ? <span>{formatContextWindow(model.context_window)}</span> : null}
+        {!usesCLIProxyAPI && model.context_window ? <span>{formatContextWindow(model.context_window)}</span> : null}
         {options.selected ? <Check className="h-3.5 w-3.5 text-foreground" aria-hidden /> : null}
       </span>
     </ComboboxOption>
@@ -386,7 +392,7 @@ export function ModelIdPicker({
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
-            value={open && !catalogNeedsSignIn ? query : value}
+            value={open && !catalogNeedsSignIn ? query : modelLabel ?? value}
             readOnly={catalogNeedsSignIn}
             onClick={() => openPicker()}
             onChange={(event) => openPicker(event.target.value)}
@@ -459,7 +465,8 @@ export function ModelIdPicker({
                     : tx("settings.models.catalogFallback", "Built-in list may be out of date.")}
                 </p> : null}
               </div>
-              {catalogNeedsSignIn && onProviderOAuthLogin && providerRow?.oauth_login_supported ? (
+              {catalogNeedsSignIn && onProviderOAuthLogin
+                && providerRow?.oauth_login_supported ? (
                 <Button
                   ref={catalogSignInRef}
                   type="button"

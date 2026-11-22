@@ -914,6 +914,7 @@
       "maxTokens": "Max output tokens",
       "temperature": "Temperature",
       "reasoningEffort": "Reasoning effort",
+      "defaultReasoningEffort": "Default ({{effort}})",
       "convertTitle": "Convert setup",
       "convertHelp": "Convert primary and fallback models to presets.",
       "converting": "Converting...",
@@ -1785,6 +1786,8 @@
       }
     },
     "oauth": {
+      "completeBrowserSignIn": "Complete sign-in in your browser. This window updates automatically.",
+      "cliproxyapiSetupHelp": "Set up the local CLIProxyAPI service before signing in.",
       "deviceCode": "Device code",
       "deviceCodeHelp": "Copy this code and enter it on GitHub. This window will update automatically after authorization.",
       "waitingForDeviceApproval": "Waiting for GitHub authorization…",

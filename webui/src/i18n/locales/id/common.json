@@ -1091,6 +1091,7 @@
       "maxTokens": "Maks. token keluaran",
       "temperature": "Temperatur",
       "reasoningEffort": "Upaya penalaran",
+      "defaultReasoningEffort": "Bawaan ({{effort}})",
       "convertTitle": "Konversi pengaturan",
       "convertHelp": "Ubah model utama dan cadangan menjadi preset.",
       "converting": "Mengonversi...",
@@ -1603,6 +1604,8 @@
       }
     },
     "oauth": {
+      "completeBrowserSignIn": "Selesaikan proses masuk di browser. Jendela ini akan diperbarui secara otomatis.",
+      "cliproxyapiSetupHelp": "Siapkan layanan CLIProxyAPI lokal sebelum masuk.",
       "deviceCode": "Kode perangkat",
       "deviceCodeHelp": "Salin kode ini dan masukkan di GitHub. Jendela ini akan diperbarui secara otomatis setelah otorisasi.",
       "waitingForDeviceApproval": "Menunggu otorisasi GitHub…",

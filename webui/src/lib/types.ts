@@ -681,6 +681,7 @@ interface ProviderModelInfo {
   output_modalities?: string[];
   reasoning_efforts?: string[];
   default_reasoning_effort?: string;
+  reasoning_family?: string;
   supports_backend_search?: boolean;
   api?: ModelAPIConfig | null;
 }
@@ -716,7 +717,7 @@ export interface ProviderOAuthAuthorizationRequired {
   flow_id: string;
   authorization_url: string;
   expires_in: number;
-  completion_input?: "authorization_code" | "callback_url" | "device_code";
+  completion_input?: "authorization_code" | "callback_url" | "device_code" | "poll";
   user_code?: string;
 }
 
@@ -814,6 +815,7 @@ export interface SettingsPayload {
     oauth_account?: string | null;
     oauth_expires_at?: number | null;
     oauth_login_supported?: boolean;
+    oauth_logout_supported?: boolean;
     use_proxy?: boolean;
     advanced_fields?: Array<
       | "extra_headers"
