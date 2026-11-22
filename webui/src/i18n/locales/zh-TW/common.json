@@ -2081,6 +2081,14 @@
             "title": "檢視狀態",
             "description": "檢視執行、提供商和聊天平臺狀態"
           },
+          "task": {
+            "title": "子任務",
+            "description": "查看本對話子任務進度或追加指令"
+          },
+          "codex": {
+            "title": "委派給 Codex",
+            "description": "在本對話中委派任務給 Codex"
+          },
           "model": {
             "title": "模型",
             "description": "檢視或切換當前模型預設"

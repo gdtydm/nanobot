@@ -28,6 +28,8 @@ const SLASH_COMMAND_KEYS = [
   "stop",
   "restart",
   "status",
+  "task",
+  "codex",
   "model",
   "history",
   "dream",
@@ -553,7 +555,26 @@ describe("webui i18n", () => {
     expect(screen.getByLabelText("メッセージ入力欄")).toBeInTheDocument();
   });
 
-  it("localizes a backend-provided compact slash command", async () => {
+  it.each([
+    {
+      command: "/compact", title: "Compact context",
+      description: "Compact this chat's context and continue the conversation.",
+      icon: "archive", lifecycle: "side_channel" as const, acceptsArgs: false,
+      localizedTitle: "压缩上下文", localizedDescription: "压缩上下文后继续对话", productIcon: "compact",
+    },
+    {
+      command: "/task", title: "Delegated tasks",
+      description: "Check progress or send a follow-up to a delegated task.",
+      icon: "workflow", lifecycle: "side_channel" as const, acceptsArgs: true,
+      localizedTitle: "子任务", localizedDescription: "查看本对话子任务进展或追加指令", productIcon: "task-inspect",
+    },
+    {
+      command: "/codex", title: "Delegate to Codex",
+      description: "Delegate a task to Codex in this conversation.",
+      icon: "workflow", lifecycle: "agent_turn_with_args" as const, acceptsArgs: true,
+      localizedTitle: "委派给 Codex", localizedDescription: "在本对话中委派任务给 Codex", productIcon: "delegation",
+    },
+  ])("localizes the backend-provided $command menu entry", async ({ localizedTitle, localizedDescription, productIcon, ...command }) => {
     await act(async () => {
       const { setAppLanguage } = await import("@/i18n");
       await setAppLanguage("zh-CN");
@@ -562,25 +583,19 @@ describe("webui i18n", () => {
     render(
       <ThreadComposer
         onSend={vi.fn()}
-        slashCommands={[{
-          command: "/compact",
-          title: "Compact context",
-          description: "Compact this chat's context and continue the conversation.",
-          icon: "archive",
-          lifecycle: "side_channel",
-          acceptsArgs: false,
-        }]}
+        slashCommands={[command]}
       />,
     );
 
     fireEvent.change(screen.getByLabelText("消息输入框"), {
-      target: { value: "/co" },
+      target: { value: command.command.slice(0, 3) },
     });
 
     expect(screen.getByRole("listbox", { name: "斜杠命令" })).toBeInTheDocument();
-    expect(screen.getByText("压缩上下文")).toBeInTheDocument();
-    expect(screen.getByText("压缩上下文后继续对话")).toBeInTheDocument();
-    expect(screen.getByText("/compact")).toBeInTheDocument();
+    expect(screen.getByText(localizedTitle)).toBeInTheDocument();
+    expect(screen.getByText(localizedDescription)).toBeInTheDocument();
+    expect(screen.getByText(command.command)).toBeInTheDocument();
+    expect(screen.getByRole("option").querySelector(`[data-product-icon="${productIcon}"]`)).toBeInTheDocument();
   });
 
   it("keeps empty landing resources localized for every registered locale", () => {

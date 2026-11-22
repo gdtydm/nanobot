@@ -2081,6 +2081,14 @@
             "title": "Afficher l’état",
             "description": "Vérifiez l’état d’exécution, des fournisseurs et des canaux."
           },
+          "task": {
+            "title": "Tâches déléguées",
+            "description": "Consultez la progression ou envoyez des consignes aux tâches de cette discussion."
+          },
+          "codex": {
+            "title": "Déléguer à Codex",
+            "description": "Déléguez une tâche à Codex dans cette discussion."
+          },
           "model": {
             "title": "Modèle",
             "description": "Consultez ou changez le préréglage de modèle actuel."

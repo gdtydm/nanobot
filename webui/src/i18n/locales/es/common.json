@@ -2081,6 +2081,14 @@
             "title": "Mostrar estado",
             "description": "Consulta el estado de ejecución, proveedores y canales."
           },
+          "task": {
+            "title": "Tareas delegadas",
+            "description": "Consulta el progreso o envía instrucciones a las tareas de este chat."
+          },
+          "codex": {
+            "title": "Delegar a Codex",
+            "description": "Delega una tarea a Codex en este chat."
+          },
           "model": {
             "title": "Modelo",
             "description": "Consulta o cambia el preajuste de modelo actual."

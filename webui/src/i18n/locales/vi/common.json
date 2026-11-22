@@ -2081,6 +2081,14 @@
             "title": "Hiển thị trạng thái",
             "description": "Xem trạng thái chạy, nhà cung cấp và kênh."
           },
+          "task": {
+            "title": "Tác vụ được giao",
+            "description": "Xem tiến độ hoặc gửi thêm hướng dẫn cho tác vụ trong cuộc trò chuyện này."
+          },
+          "codex": {
+            "title": "Giao cho Codex",
+            "description": "Giao tác vụ cho Codex trong cuộc trò chuyện này."
+          },
           "model": {
             "title": "Mô hình",
             "description": "Xem hoặc đổi bộ thiết lập mô hình hiện tại."

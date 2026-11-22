@@ -2093,6 +2093,14 @@
             "title": "Mostrar status",
             "description": "Confira o status de execução, provedores e canais."
           },
+          "task": {
+            "title": "Tarefas delegadas",
+            "description": "Veja o progresso ou envie instruções às tarefas desta conversa."
+          },
+          "codex": {
+            "title": "Delegar ao Codex",
+            "description": "Delegue uma tarefa ao Codex nesta conversa."
+          },
           "model": {
             "title": "Modelo",
             "description": "Veja ou troque o preset de modelo atual."

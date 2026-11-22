@@ -2081,6 +2081,14 @@
             "title": "ステータスを表示",
             "description": "実行、プロバイダー、チャンネルの状態を確認します。"
           },
+          "task": {
+            "title": "サブタスク",
+            "description": "このチャットのタスクの進捗を確認し、追加の指示を送ります。"
+          },
+          "codex": {
+            "title": "Codex に委任",
+            "description": "このチャットでタスクを Codex に委任します。"
+          },
           "model": {
             "title": "モデル",
             "description": "現在のモデルプリセットを確認・切り替えます。"

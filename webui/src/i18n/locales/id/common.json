@@ -2081,6 +2081,14 @@
             "title": "Tampilkan status",
             "description": "Periksa status eksekusi, penyedia, dan kanal."
           },
+          "task": {
+            "title": "Tugas yang didelegasikan",
+            "description": "Lihat progres atau kirim instruksi lanjutan untuk tugas dalam obrolan ini."
+          },
+          "codex": {
+            "title": "Delegasikan ke Codex",
+            "description": "Delegasikan tugas ke Codex dalam obrolan ini."
+          },
           "model": {
             "title": "Model",
             "description": "Lihat atau ganti preset model saat ini."

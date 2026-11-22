@@ -4,6 +4,8 @@ import {
   CompactIcon,
   StatusIcon,
   ModelsIcon,
+  DelegationIcon,
+  TaskInspectIcon,
   TriggerIcon,
   DreamLogIcon,
   PromptTemplateIcon,
@@ -300,6 +302,7 @@ const COMMAND_ICONS: Record<string, LucideIcon> = {
 const BUILTIN_COMMAND_ICONS: Record<string, LucideIcon> = {
   "/new": NewChatIcon, "/compact": CompactIcon, "/stop": StopIcon,
   "/restart": RestartIcon, "/status": StatusIcon, "/model": ModelsIcon,
+  "/task": TaskInspectIcon, "/codex": DelegationIcon,
   "/history": HistoryIcon, "/goal": GoalIcon, "/trigger": TriggerIcon,
   "/dream": DreamIcon, "/dream-log": DreamLogIcon, "/dream-restore": RestoreMemoryIcon,
   "/dream-prompt": PromptTemplateIcon, "/evaluator-prompt": PromptTemplateIcon,
