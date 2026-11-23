@@ -1090,8 +1090,11 @@ class TelegramChannel(BaseChannel):
         if app is None:
             raise ChannelNotReadyError("Telegram bot not running")
         thread_id = msg.metadata.get("message_thread_id")
+        markdown = msg.metadata.get("render_as") == "markdown"
         sent = await self._call_with_retry(
-            app.bot.send_message, chat_id=int(msg.chat_id), text=msg.content[:4096],
+            app.bot.send_message, chat_id=int(msg.chat_id),
+            text=_markdown_to_telegram_html(msg.content) if markdown else msg.content[:4096],
+            **({"parse_mode": "HTML"} if markdown else {}),
             message_thread_id=int(thread_id) if thread_id else None,
         )
         return str(sent.message_id)

@@ -12,6 +12,7 @@ SubagentState = Literal[
     "queued", "running", "waiting_input", "stopping", "done", "incomplete", "error", "cancelled", "interrupted",
 ]
 SubagentBackend = Literal["native", "codex"]
+_BACKEND_NAMES: dict[SubagentBackend, str] = {"native": "Subagent", "codex": "Codex"}
 SubagentKind = Literal["general", "code_change"]
 ReviewDetail = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 ReviewIndex = Annotated[int, Field(strict=True, ge=1)]
@@ -129,6 +130,10 @@ class SubagentStatus:
     @property
     def reference(self) -> str:
         return self.task_id[:8]
+
+    @property
+    def backend_name(self) -> str:
+        return _BACKEND_NAMES.get(self.backend, self.backend)
 
     def record_progress(
         self, key: str, summary: str, *, detail: str = "", next_step: str = "",

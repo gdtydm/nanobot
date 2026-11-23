@@ -10,6 +10,7 @@ from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from functools import partial
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, cast
 
@@ -58,8 +59,9 @@ from nanobot.agent.tools.context import (
 from nanobot.agent.tools.exec_session import ExecSessionManager
 from nanobot.agent.tools.file_state import FileStates
 from nanobot.agent.tools.loader import ToolLoader
+from nanobot.agent.tools.message import record_message_delivery
 from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.agent.tools.schema import StringSchema, tool_parameters_schema
+from nanobot.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 from nanobot.agent.tools.subagent_config import SubagentProjectConfig, SubagentToolConfig
 from nanobot.agent.turn_hooks import AgentTurnHookSpec, build_agent_turn_hook
 from nanobot.bus.events import InboundMessage, OutboundMessage
@@ -85,7 +87,7 @@ from nanobot.session.manager import Session, SessionManager, SessionPolicy
 from nanobot.utils.cancellation import shield_and_drain
 from nanobot.utils.llm_runtime import LLMRuntime
 from nanobot.utils.prompt_templates import render_template
-from nanobot.utils.subagent_channel_display import task_display_text, task_query_block
+from nanobot.utils.subagent_channel_display import task_display_text, task_query_block, task_receipt
 
 if TYPE_CHECKING:
     from nanobot.agent.memory import Consolidator
@@ -93,6 +95,7 @@ if TYPE_CHECKING:
 
 SUBAGENT_REPLY_FIRST_META = "_subagent_reply_first"
 SUBAGENT_ORIGIN_SENDER_META = "_subagent_origin_sender_id"
+_MILESTONE_PREFIX = "[Milestone] "
 
 
 class _SubagentOrigin(TypedDict):
@@ -138,6 +141,7 @@ class _SubagentTask:
     origin_message_id: str | None = None
     workspace_scope: WorkspaceScope | None = None
     project_config: SubagentProjectConfig | None = None
+    receipt_summary: str = ""
     announce: bool = True
     begun: bool = False
     suppress_notice: bool = False
@@ -217,13 +221,15 @@ class _SubagentHook(AgentHook):
                  *, check_active: Callable[[], None] | None = None,
                  native_commentary: bool = False,
                  max_result_chars: int = 16000,
-                 on_status: Callable[[SubagentStatus], Awaitable[None]] | None = None) -> None:
+                 on_status: Callable[[SubagentStatus], Awaitable[None]] | None = None,
+                 on_milestone: Callable[[str], Awaitable[None]] | None = None) -> None:
         super().__init__()
         self._status = status
         self._check_active = check_active
         self._native_commentary = native_commentary
         self._max_result_chars = max_result_chars
         self._on_status = on_status
+        self._on_milestone = on_milestone
 
     def _remember_output(self, context: AgentHookContext) -> None:
         if self._status is None or context.error or context.response is None:
@@ -235,7 +241,7 @@ class _SubagentHook(AgentHook):
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         self._remember_output(context)
-        self._remember_commentary(context)
+        await self._remember_commentary(context)
         if self._status is not None:
             self._status.tool_events = [
                 {"name": call.name, "status": "running"} for call in context.tool_calls
@@ -258,19 +264,23 @@ class _SubagentHook(AgentHook):
         self._status.usage = context.usage
         self._remember_output(context)
         if context.response is not None and not context.response.should_execute_tools:
-            self._remember_commentary(context)
+            await self._remember_commentary(context)
         if context.error:
             self._status.error = str(context.error)
         if self._on_status is not None:
             await self._on_status(self._status)
 
-    def _remember_commentary(self, context: AgentHookContext) -> None:
+    async def _remember_commentary(self, context: AgentHookContext) -> None:
         if not self._native_commentary or self._status is None or context.response is None:
             return
         for item in context.response.commentary:
             summary = item.text.strip()[:800]
-            if summary:
-                self._status.record_progress(item.id or summary, summary)
+            if not summary:
+                continue
+            milestone = summary.removeprefix(_MILESTONE_PREFIX).strip()
+            if self._status.record_progress(item.id or summary, milestone) and summary.startswith(_MILESTONE_PREFIX):
+                if self._on_milestone is not None:
+                    await self._on_milestone(milestone)
 
 
 @tool_parameters(tool_parameters_schema(
@@ -282,13 +292,16 @@ class _SubagentHook(AgentHook):
     milestone=StringSchema("Optional stable key for deduplicating retries.", min_length=1, max_length=120),
     detail=StringSchema("Optional detail shown in the task's on-demand log.", max_length=500),
     next_step=StringSchema("Optional next step shown in the task's on-demand status.", max_length=200),
+    notify=BooleanSchema(description=(
+        "Send to the originating chat only for a verified milestone that materially advances a multi-step task."
+    ), default=False),
 ))
 class _ReportProgressTool(Tool):
     """Save a short progress update for on-demand task queries."""
 
     _plugin_discoverable = False
 
-    def __init__(self, report: Callable[[str, str, str, str], Awaitable[str]]) -> None:
+    def __init__(self, report: Callable[[str, str, str, str, bool], Awaitable[str]]) -> None:
         self._report = report
 
     @property
@@ -300,12 +313,13 @@ class _ReportProgressTool(Tool):
         return "Record a brief progress update for /task when a meaningful milestone changes the situation."
 
     async def execute(
-        self, *, summary: str = "", milestone: str = "", detail: str = "", next_step: str = "", **kwargs: Any,
+        self, *, summary: str = "", milestone: str = "", detail: str = "", next_step: str = "",
+        notify: bool = False, **kwargs: Any,
     ) -> str:
         summary = summary.strip()
         if not summary:
             return ToolResult.error("A progress update is required.")
-        return await self._report(milestone.strip() or summary, summary, detail.strip(), next_step.strip())
+        return await self._report(milestone.strip() or summary, summary, detail.strip(), next_step.strip(), notify)
 
 
 @tool_parameters(tool_parameters_schema(
@@ -797,7 +811,7 @@ class SubagentManager:
         backend: SubagentBackend = "native", sender_id: str | None = None,
         origin_route: dict[str, Any] | None = None,
         origin_generation: str | None = None,
-        kind: SubagentKind | None = None,
+        kind: SubagentKind | None = None, receipt_summary: str = "",
     ) -> _SubagentTask:
         self.bus.admission.check()
         parent_runtime = None
@@ -961,6 +975,7 @@ class SubagentManager:
             origin_message_id=origin_message_id,
             workspace_scope=workspace_scope,
             project_config=project_config,
+            receipt_summary=receipt_summary,
             announce=announce,
         )
         self._tasks[task_id] = record
@@ -983,6 +998,7 @@ class SubagentManager:
         self, task: str, *, label: str | None, project: str | None, worktree: bool | None,
         request: RequestContext,
         base_ref: str | None = None, resume_task_id: str | None = None, adopt_branch: str | None = None,
+        receipt_summary: str = "",
     ) -> tuple[str, bool]:
         if not self.tools_config.subagent.codex.enabled:
             raise SubagentControlError("Codex tasks are disabled (tools.subagent.codex.enabled)")
@@ -1014,6 +1030,7 @@ class SubagentManager:
                 sender_id=request.sender_id,
                 origin_route=notification_metadata(request.channel, request.metadata),
                 origin_generation=request.session_generation,
+                receipt_summary=receipt_summary,
             )
         if not request.can_receive_background_results:
             status = await self.wait_for_codex_turn(record.status.task_id, owner)
@@ -1123,7 +1140,7 @@ class SubagentManager:
             status.pending_inputs.pop(0)
             await self._save_status(status)
 
-    async def _task_notice(self, record: _SubagentTask, kind: str, text: str) -> bool:
+    async def _task_notice(self, record: _SubagentTask, kind: str, text: str = "") -> bool:
         status = record.status
         if not record.announce or self.send_task_notice is None or record.suppress_notice:
             return False
@@ -1132,10 +1149,14 @@ class SubagentManager:
         if self.sessions is None or not self.sessions.contains(status.task_id, status.owner):
             return False
         if kind == "receipt":
-            content = (
-                f"✅ Codex · {task_display_text(status.label)} · {text}\n\n"
-                f"{task_query_block(status.reference)}"
+            content = task_receipt(
+                status.backend_name, status.label, status.reference, status.state, summary=record.receipt_summary,
+                project=status.project, worktree=status.worktree_id is not None,
+                base_ref=status.base_ref, branch=status.adopt_branch or status.branch,
             )
+        elif kind.startswith("progress:"):
+            label = " ".join(status.label.split())[:160]
+            content = f"【子任务｜进展】{status.backend_name} [{status.reference}] · {label}\n\n{text}"
         elif status.backend == "codex":
             content = f"Codex · {status.label} · {status.reference}\n{text}"
         else:
@@ -1150,13 +1171,15 @@ class SubagentManager:
                     channel=record.origin["channel"], chat_id=record.origin["chat_id"], content=content,
                     metadata={**status.origin_route, "message_id": status.origin_message_id,
                               "_session_key": status.owner, "_session_generation": status.origin_generation,
-                              **({"render_as": "text"} if kind != "receipt" else {}),
+                              "render_as": "markdown" if kind == "receipt" else "text",
                               "task_notice_id": f"{status.task_id}:{kind}"},
                 ))
         except Exception as exc:
             logger.warning("Task notice {} could not be delivered: {}", kind, type(exc).__name__)
             return False
         status.notice_ids[kind] = message_id or ""
+        if kind == "receipt" and status.backend == "native":
+            status.reply_first = True
         await self._save_status(status)
         self._refresh_terminal_snapshot(record)
         return True
@@ -1175,7 +1198,7 @@ class SubagentManager:
             if status.backend != "codex" or status.origin_channel != msg.channel or status.origin_chat_id != msg.chat_id:
                 continue
             key = next((key for key, val in status.notice_ids.items() if val == parent_id), None)
-            if key is None or key == "terminal":
+            if key is None or key == "terminal" or key.startswith("progress:"):
                 continue
             text = msg.metadata.get("task_reply_text", msg.content)
             if not isinstance(text, str) or not text.strip():
@@ -1224,7 +1247,7 @@ class SubagentManager:
         sender_id: str | None = None,
         base_ref: str | None = None,
         adopt_branch: str | None = None,
-        kind: SubagentKind | None = None,
+        kind: SubagentKind | None = None, receipt_summary: str = "",
     ) -> str:
         """Start background work and route its terminal result to the parent."""
         try:
@@ -1234,10 +1257,28 @@ class SubagentManager:
                 session_policy=session_policy, project=project, resume_task_id=resume_task_id,
                 reply_first=reply_first, worktree=worktree, origin_route=origin_route, sender_id=sender_id,
                 origin_generation=origin_generation, base_ref=base_ref, adopt_branch=adopt_branch, kind=kind,
+                receipt_summary=receipt_summary,
             )
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
         status = record.status
+        if self.send_task_notice is not None:
+            await record.receipt_attempted.wait()
+            if "receipt" in status.notice_ids:
+                if not reply_first:
+                    record_message_delivery(origin_channel, origin_chat_id, task_receipt=True)
+                followup = (
+                    " Reply with any verified findings requested by the user." if reply_first else ""
+                )
+                return (
+                    f"Subagent [{status.label}] accepted for background execution (id: {status.task_id}). "
+                    "The task card was delivered. Do not repeat it. The result will arrive separately." + followup
+                )
+            return (
+                f"Subagent [{status.label}] accepted for background execution (id: {status.task_id}). "
+                "The task card could not be delivered. Include this command in your reply:\n\n"
+                f"{task_query_block(status.reference)}"
+            )
         if status.reply_first:
             return (
                 f"Subagent [{status.label}] accepted for background execution (id: {status.task_id}). "
@@ -1350,9 +1391,9 @@ class SubagentManager:
         record.begun = True
         try:
             record.raise_if_stopping()
-            if status.backend == "codex" and status.codex_turn is None and "receipt" not in status.notice_ids:
+            if status.codex_turn is None and "receipt" not in status.notice_ids:
                 try:
-                    await self._task_notice(record, "receipt", "Accepted by Codex")
+                    await self._task_notice(record, "receipt")
                 finally:
                     record.receipt_attempted.set()
             async with self._run_slots:
@@ -1467,8 +1508,10 @@ class SubagentManager:
                         "\n\nReturn a structured result with state, summary and question. "
                         "Use needs_input and ask one concrete question if a user decision blocks the task. "
                         "Use done only after checking the requested deliverables. "
-                        "Include verified tests, external instance IDs and artifact references in the summary. "
-                        "Report confirmed milestones and external instance IDs in brief commentary as you work."
+                        "Include verified tests, external instance IDs and artifact references in the summary."
+                    )
+                    task_text += "\n\n" + render_template(
+                        "agent/_snippets/subagent_progress.md", commentary=True, strip=True,
                     )
                     status.codex_turn = await codex.start(task_text)
                     status.phase = "executing"
@@ -1506,8 +1549,11 @@ class SubagentManager:
                 summary = text.strip()[:800]
                 item_id = item.get("id")
                 key = f"{status.codex_turn}:{item_id}" if isinstance(item_id, str) and item_id else summary
-                if status.record_progress(key, f"Codex reported: {summary}"):
+                milestone = summary.removeprefix(_MILESTONE_PREFIX).strip()
+                if status.record_progress(key, f"Codex reported: {milestone}"):
                     await self._save_status(status)
+                    if summary.startswith(_MILESTONE_PREFIX):
+                        await self._notify_milestone(record, milestone)
             return
         if kind not in {"commandExecution", "fileChange", "mcpToolCall", "webSearch"}:
             return
@@ -1528,7 +1574,7 @@ class SubagentManager:
             await self._save_status(status)
 
     async def _report_progress(
-        self, record: _SubagentTask, milestone: str, summary: str, detail: str = "", next_step: str = "",
+        self, record: _SubagentTask, milestone: str, summary: str, detail: str, next_step: str, notify: bool,
     ) -> str:
         record.raise_if_stopping()
         if milestone in record.reported_milestones:
@@ -1537,7 +1583,14 @@ class SubagentManager:
         status = record.status
         status.record_progress(milestone, summary, detail=detail, next_step=next_step)
         await self._save_status(status)
+        if notify:
+            await self._notify_milestone(record, summary)
         return "Milestone recorded."
+
+    async def _notify_milestone(self, record: _SubagentTask, summary: str) -> None:
+        if summary:
+            digest = sha256(" ".join(summary.split()).encode()).hexdigest()
+            await self._task_notice(record, f"progress:{digest}", summary)
 
     async def _request_native_input(self, record: _SubagentTask, question: str) -> str:
         record.raise_if_stopping()
@@ -1794,6 +1847,7 @@ class SubagentManager:
                 native_commentary=native_commentary,
                 max_result_chars=self.max_tool_result_chars,
                 on_status=save_observation,
+                on_milestone=partial(self._notify_milestone, record),
             )],
             ephemeral=not record.session.policy.persist,
             run_extra_hooks_for_ephemeral=True,
@@ -1983,7 +2037,7 @@ class SubagentManager:
             skills_summary=skills_summary or "",
             project=project,
             worktree=worktree,
-            native_commentary=native_commentary,
+            commentary=native_commentary,
             project_instructions=load_project_instructions(project_workspace) if project else "",
         )
 

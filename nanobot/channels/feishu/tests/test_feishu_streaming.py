@@ -53,6 +53,23 @@ def _mock_content_response(success: bool = True):
     return resp
 
 
+@pytest.mark.asyncio
+async def test_task_receipt_sends_complete_copyable_code_block_in_reply_card():
+    channel = _make_channel(reply_to_message=True)
+    channel._client.im.v1.message.reply.return_value = _mock_send_response("om_task_receipt")
+    content = "【子任务】Subagent\n\n**当前状态：** queued\n\n```text\n/task 20fe60f8\n```"
+    message = OutboundMessage(
+        channel="feishu", chat_id="ou_owner", content=content,
+        metadata={"message_id": "om_user", "task_notice_id": "20fe60f8:receipt", "render_as": "markdown"},
+    )
+
+    assert await channel.send_task_notice(message) == "om_task_receipt"
+    request = channel._client.im.v1.message.reply.call_args.args[0]
+    assert request.message_id == "om_user"
+    assert request.request_body.msg_type == "interactive"
+    assert json.loads(request.request_body.content)["elements"] == [{"tag": "markdown", "content": content}]
+
+
 class TestFeishuStreamingConfig:
     def test_streaming_default_true(self):
         assert FeishuConfig().streaming is True

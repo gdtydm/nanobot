@@ -8,10 +8,19 @@ from typing import TYPE_CHECKING
 from nanobot.agent.subagent import SubagentControlError
 from nanobot.agent.tools.base import ToolResult
 from nanobot.agent.tools.context import current_request_context
+from nanobot.agent.tools.schema import StringSchema
+from nanobot.utils.subagent_channel_display import TASK_RECEIPT_SUMMARY_LIMIT
 
 if TYPE_CHECKING:
     from nanobot.agent.subagent import SubagentManager
     from nanobot.agent.subagent_status import SubagentBackend
+
+
+TASK_RECEIPT_SUMMARY = StringSchema(
+    "For background create: brief user-facing Markdown with the scope, key deliverables, and verification "
+    "criteria when known. Include an assigned business task number when available. Omit internal instructions.",
+    max_length=TASK_RECEIPT_SUMMARY_LIMIT,
+)
 
 
 async def control_task(

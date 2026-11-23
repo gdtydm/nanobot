@@ -2374,19 +2374,27 @@ class FeishuChannel(BaseChannel):
         if not self._client:
             raise ChannelNotReadyError("Feishu client is not ready")
         request_uuid = uuid.uuid5(uuid.NAMESPACE_URL, str(msg.metadata["task_notice_id"])).hex
-        content = json.dumps({"text": msg.content}, ensure_ascii=False)
+        msg_type = "text"
+        payload = {"text": msg.content}
+        if msg.metadata.get("render_as") == "markdown":
+            msg_type = "interactive"
+            payload = {
+                "config": {"wide_screen_mode": True},
+                "elements": [{"tag": "markdown", "content": msg.content}],
+            }
+        content = json.dumps(payload, ensure_ascii=False)
         message_id = msg.metadata.get("message_id")
         if isinstance(message_id, str) and (msg.metadata.get("thread_id") or self.config.reply_to_message):
             from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody
 
-            body = ReplyMessageRequestBody.builder().msg_type("text").content(content).uuid(request_uuid)
+            body = ReplyMessageRequestBody.builder().msg_type(msg_type).content(content).uuid(request_uuid)
             request = ReplyMessageRequest.builder().message_id(message_id).request_body(body.build()).build()
             response = await asyncio.to_thread(self._client.im.v1.message.reply, request)
             sent_id = getattr(response.data, "message_id", None) if response.success() else None
         else:
             receive_id_type = "chat_id" if msg.chat_id.startswith("oc_") else "open_id"
             sent_id = await asyncio.to_thread(
-                self._send_message_sync, receive_id_type, msg.chat_id, "text", content, request_uuid=request_uuid,
+                self._send_message_sync, receive_id_type, msg.chat_id, msg_type, content, request_uuid=request_uuid,
             )
         if not sent_id:
             raise RuntimeError("Feishu did not confirm delivery of the task notice")

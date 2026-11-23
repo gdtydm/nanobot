@@ -7,7 +7,7 @@ from nanobot.agent.tools.base import Tool, ToolResult, tool_parameters
 from nanobot.agent.tools.context import current_request_context
 from nanobot.agent.tools.message import record_message_delivery
 from nanobot.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
-from nanobot.agent.tools.task_control import control_task
+from nanobot.agent.tools.task_control import TASK_RECEIPT_SUMMARY, control_task
 
 if TYPE_CHECKING:
     from nanobot.agent.subagent import SubagentManager
@@ -26,6 +26,7 @@ def codex_task_available(request: RequestContext | None) -> bool:
     ),
     task=StringSchema("Required for create: task scope, constraints, and evidence needed to verify completion.", min_length=1),
     label=StringSchema("Short display label."),
+    receipt_summary=TASK_RECEIPT_SUMMARY,
     project=StringSchema("Configured project to run in. Codex loads its own context in that checkout."),
     worktree=BooleanSchema(description="Use true for an isolated project worktree; false uses the existing checkout."),
     resume_task_id=StringSchema("Finished Codex task ID in this chat. Reuse its saved thread and checkout."),
@@ -57,6 +58,7 @@ class CodexTaskTool(Tool):
         "to continue a finished task. Use check to find Codex tasks and read status or results. Use send to add "
         "instructions; for waiting_input, get question_id with check and include it with the answer. "
         "Use cancel to stop a Codex task. If several tasks match, ask the user which one before sending or cancelling. "
+        "Supply receipt_summary for the background task card and do not repeat the card in your reply. "
         "Verify the outcome before reporting completion."
     )
 
@@ -77,7 +79,7 @@ class CodexTaskTool(Tool):
         task: str | None = None, label: str | None = None, project: str | None = None,
         worktree: bool | None = None, resume_task_id: str | None = None,
         base_ref: str | None = None, adopt_branch: str | None = None,
-        query: str | None = None, question_id: str | None = None,
+        query: str | None = None, question_id: str | None = None, receipt_summary: str = "",
     ) -> str:
         request = current_request_context()
         if request is None or not codex_task_available(request):
@@ -93,9 +95,10 @@ class CodexTaskTool(Tool):
             result, receipt_delivered = await self._manager.spawn_codex(
                 task, label=label, project=project, worktree=worktree, request=request,
                 base_ref=base_ref, resume_task_id=resume_task_id, adopt_branch=adopt_branch,
+                receipt_summary=receipt_summary,
             )
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
         if receipt_delivered:
-            record_message_delivery(request.channel, request.chat_id)
+            record_message_delivery(request.channel, request.chat_id, task_receipt=True)
         return result

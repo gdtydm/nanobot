@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
+from nanobot.agent.tools.message import task_receipt_delivered
 from nanobot.bus.delivery import DeliveryRequest
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.notification_delivery import notification_is_deliverable
@@ -218,6 +219,7 @@ class TurnDelivery:
     _failure_error_kind: str | None = field(init=False, default=None)
     _retry_status: RetryStatusEvent | None = field(init=False, default=None)
     _response_input_ids: tuple[str, ...] | None = field(init=False, default=None)
+    _initial_response_input_ids: tuple[str, ...] = field(init=False)
     _response_source: ResponseSource | None = field(init=False, default=None)
     _response_source_seen: bool = field(init=False, default=False)
     _response_content: str | None = field(init=False, default=None)
@@ -228,6 +230,7 @@ class TurnDelivery:
         self.run_id = uuid4().hex
         input_id = input_history_metadata(self.input_message)["input_id"]
         self._response_input_ids = (input_id,) if input_id else None
+        self._initial_response_input_ids = self._response_input_ids or ()
         self._automatic_delivery = not cron_uses_explicit_delivery(self.input_message.metadata)
         self._routed_events = self._bind_routed_events()
         self.events = EventSink(
@@ -487,6 +490,13 @@ class TurnDelivery:
             self._retry_status = event if event.state == "exhausted" else None
         if isinstance(event, StreamDeltaEvent | StreamEndEvent):
             if not self.streaming:
+                return
+            if (
+                isinstance(event, StreamDeltaEvent)
+                and self.input_message.is_user_input
+                and (self._response_input_ids or ()) == self._initial_response_input_ids
+                and task_receipt_delivered(self.route.channel, self.route.chat_id)
+            ):
                 return
             event = dataclasses.replace(event, stream_id=self._stream_id())
             if isinstance(event, StreamDeltaEvent) and event.content:

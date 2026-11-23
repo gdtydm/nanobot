@@ -45,11 +45,11 @@ A path can have the same name as a command. For example, `/new` starts a new con
 
 Use the short ID from `/task` to inspect or steer a native or Codex task. `/task send <instruction>` selects the task when exactly one task in the conversation is active. When several tasks are active, specify the target with `/task <id> send <instruction>`. An accepted instruction is queued. Check its receipt with `/task <id>` to see when it was delivered to the worker. For native tasks, delivery happens between model calls. Answer a pending Codex question using its question reply flow.
 
-Task command replies are marked as subagent interactions. The gateway reads the task's saved reports and runtime phase directly, without calling a model or adding the command and its reply to the main agent's conversation history. Existing task notifications continue to arrive automatically.
+Task command replies are marked as subagent interactions. The gateway reads the task's saved reports and runtime phase directly, without calling a model or adding the command and its reply to the main agent's conversation history.
 
-The Codex acceptance notice and the active task list put the complete `/task <id>` command in its own code block for copying.
+Background task executors share one acceptance card. The heading shows the executor name, currently **Codex** or **Subagent**. The card shows the task, queued state, checkout details when applicable, and the user-facing scope and verification criteria when provided. Both the card and the active task list put the complete `/task <id>` command in its own code block for copying. New executors use the same card fields and progress rules.
 
-Native subtasks record brief milestone updates for `/task`. When a native background task needs a user decision, it sends the question to the originating conversation and waits for `/task <id> send <answer>`. An in-flight native task waiting for input is interrupted if the gateway restarts.
+Use `/task` for routine progress such as worktree setup or tool activity. A task can notify the originating chat when a verified result materially advances a multi-step assignment. When a native background task needs a user decision, it sends the question to the originating conversation and waits for `/task <id> send <answer>`. An in-flight native task waiting for input is interrupted if the gateway restarts.
 
 Use a follow-up to adjust the current assignment, such as changing the date range. The task keeps its other deliverables and acceptance criteria unless you explicitly replace the assignment.
 

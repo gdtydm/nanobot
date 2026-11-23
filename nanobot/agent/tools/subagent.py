@@ -13,7 +13,7 @@ from nanobot.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
-from nanobot.agent.tools.task_control import control_task
+from nanobot.agent.tools.task_control import TASK_RECEIPT_SUMMARY, control_task
 from nanobot.channels.notification_routes import notification_metadata
 from nanobot.security.workspace_access import current_workspace_scope
 from nanobot.session.manager import SessionPolicy
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     ),
     task=StringSchema("Required for create: the task for the subagent to complete.", min_length=1),
     label=StringSchema("Display label for create."),
+    receipt_summary=TASK_RECEIPT_SUMMARY,
     kind=StringSchema(
         "Native create: use code_change for repository implementation or fixes so managed worktrees "
         "receive automatic review. Use general for research, diagnosis and routine operations.",
@@ -119,7 +120,8 @@ class SubagentTool(Tool):
             "Use send to add instructions to queued or running native tasks. "
             "Use check to discover projects, find tasks, or read status and results by task_id. Use cancel to stop a task. "
             "If several tasks match, ask the user which one before sending or cancelling. "
-            "Supported channels deliver background results automatically. Verify the outcome before reporting completion."
+            "Supported channels send a background task card and deliver results automatically. Supply receipt_summary "
+            "and do not repeat the card in your reply. Verify the outcome before reporting completion."
         )
 
     @property
@@ -133,14 +135,14 @@ class SubagentTool(Tool):
         project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False,
         worktree: bool | None = None, query: str | None = None,
         base_ref: str | None = None, adopt_branch: str | None = None,
-        kind: SubagentKind | None = None,
+        kind: SubagentKind | None = None, receipt_summary: str = "",
     ) -> str:
         if action == "create":
             if not task or not task.strip():
                 return ToolResult.error("Error: create requires a non-empty task")
             return await self._create_task(
                 task, label, temperature, wait, project, resume_task_id, reply_first, worktree,
-                base_ref=base_ref, adopt_branch=adopt_branch, kind=kind,
+                base_ref=base_ref, adopt_branch=adopt_branch, kind=kind, receipt_summary=receipt_summary,
             )
         return await control_task(
             self._manager, backend="native", action=action, task_id=task_id, query=query, message=message,
@@ -150,7 +152,7 @@ class SubagentTool(Tool):
         self, task: str, label: str | None, temperature: float | None, wait: bool,
         project: str | None = None, resume_task_id: str | None = None, reply_first: bool = False,
         worktree: bool | None = None, *, base_ref: str | None = None, adopt_branch: str | None = None,
-        kind: SubagentKind | None = None,
+        kind: SubagentKind | None = None, receipt_summary: str = "",
     ) -> str:
         request_ctx = current_request_context()
         if request_ctx is None or request_ctx.runtime is None:
@@ -170,6 +172,7 @@ class SubagentTool(Tool):
             method = partial(
                 method, origin_route=notification_metadata(origin_channel, request_ctx.metadata),
                 origin_generation=request_ctx.session_generation, sender_id=request_ctx.sender_id,
+                receipt_summary=receipt_summary,
             )
         return await method(
             task=task,

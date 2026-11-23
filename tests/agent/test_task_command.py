@@ -186,7 +186,7 @@ async def test_task_reads_openai_commentary_from_status_without_replaying_the_di
 
         assert len(requests) == 2
         for body in requests:
-            assert "Include that sentence and the tool call in the same response" in body["instructions"]
+            assert "Start the commentary with `[Milestone]`" in body["instructions"]
             assert "report_progress" not in body["instructions"]
             assert all(tool["name"] != "report_progress" for tool in body["tools"])
         assert next(item for item in requests[1]["input"] if item.get("phase") == "commentary")["content"] == (

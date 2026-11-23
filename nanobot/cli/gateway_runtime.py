@@ -999,11 +999,6 @@ def _run_claimed_gateway(
             tasks,
             console.print,
         )
-        from nanobot.channels.subagent_progress import ProjectSubagentProgress
-
-        task_progress = ProjectSubagentProgress(
-            bus, agent.subagents.check, agent.subagents.is_execution_live,
-        ) if config.tools.subagent.projects else None
         try:
             await agent.subagents.recover_interrupted()
             # Re-read once on first admission to close the watcher subscription window.
@@ -1128,8 +1123,6 @@ def _run_claimed_gateway(
                     with suppress(asyncio.CancelledError):
                         await shutdown_task
                 cron.stop()
-                if task_progress is not None:
-                    await task_progress.close()
                 # A gateway exit interrupts ownership of active turns; it is
                 # not the same as the user stopping a turn.  Keep checkpoints
                 # so the next gateway can offer an explicit Continue action.

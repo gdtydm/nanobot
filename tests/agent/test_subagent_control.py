@@ -26,7 +26,7 @@ from nanobot.agent.tools.registry import ToolRegistry, is_tool_error_result
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.subagent import SubagentTool
 from nanobot.bus.events import InboundMessage
-from nanobot.bus.outbound_events import TransientCommandReplyEvent
+from nanobot.bus.outbound_events import StreamDeltaEvent, TransientCommandReplyEvent
 from nanobot.bus.queue import MessageBus
 from nanobot.bus.runtime_events import TurnRunStatusChanged
 from nanobot.command.router import CommandContext
@@ -414,6 +414,94 @@ async def test_native_progress_stays_in_task_status_while_parent_waits(loop_fact
         release_child.set()
         loop.stop()
         await asyncio.wait_for(consumer, timeout=20)
+
+
+@pytest.mark.asyncio
+async def test_native_task_notifies_with_one_receipt_and_verified_milestone(loop_factory):
+    loop = loop_factory()
+    loop.provider.provider_name = "test"
+    message = InboundMessage(
+        channel="feishu", sender_id="user", chat_id="owner", content="Publish and validate the backfill",
+        metadata={"_wants_stream": True},
+    )
+    milestone = "Backfill accepted as run 3292731. Validation is next."
+    routine = "The workspace is ready."
+    duplicate_reply = "I started the backfill task."
+    child_result = "Validated the backfill output."
+    notices = []
+    outbound = []
+    loop.bus.outbound_recorder = outbound.append
+    child_waiting = asyncio.Event()
+    parent_finished = asyncio.Event()
+    release_child = asyncio.Event()
+
+    async def deliver(notice):
+        notices.append(notice)
+        return notice.metadata["task_notice_id"]
+
+    async def on_status(event):
+        if event.context.session_key == message.session_key and event.status == "idle":
+            parent_finished.set()
+
+    async def respond(**kwargs):
+        tools = {tool["function"]["name"] for tool in kwargs.get("tools") or []}
+        transcript = str(kwargs["messages"])
+        if "report_progress" in tools:
+            if not any(row["role"] == "tool" for row in kwargs["messages"]):
+                return LLMResponse(content=None, tool_calls=[
+                    ToolCallRequest(id="workspace", name="report_progress", arguments={"summary": routine}),
+                    ToolCallRequest(id="run", name="report_progress", arguments={"summary": milestone, "notify": True}),
+                    ToolCallRequest(id="retry", name="report_progress", arguments={
+                        "milestone": "second-report", "summary": milestone, "notify": True,
+                    }),
+                ])
+            child_waiting.set()
+            await release_child.wait()
+            return LLMResponse(content=child_result)
+        if child_result in transcript:
+            return LLMResponse(content=child_result)
+        if "The task card was delivered" in transcript:
+            await kwargs["on_content_delta"](duplicate_reply)
+            return LLMResponse(content=duplicate_reply)
+        return LLMResponse(content=None, tool_calls=[ToolCallRequest(
+            id="delegate", name="subagent", arguments={
+                "action": "create", "task": "Run the release and check the results.", "label": "BACKFILL-42",
+                "receipt_summary": "Publish the backfill.\n\n- 验收：Verify the output.",
+            },
+        )])
+
+    loop.subagents.send_task_notice = deliver
+    loop.provider.chat_stream_with_retry = respond
+    unsubscribe = loop.bus.subscribe(on_status, TurnRunStatusChanged)
+    worker = asyncio.create_task(loop.run())
+    try:
+        await loop.bus.publish_inbound(message)
+        async with asyncio.timeout(5):
+            await child_waiting.wait()
+            await parent_finished.wait()
+        task, = loop.subagents.statuses_for_session(message.session_key).values()
+        assert task.state == "running"
+        card, progress = notices
+        assert (card.channel, card.chat_id) == (message.channel, message.chat_id)
+        assert card.content == (
+            "【子任务】Subagent\n\n**任务：** BACKFILL-42\n\n**当前状态：** queued\n\n"
+            "Publish the backfill.\n\n- 验收：Verify the output.\n\n"
+            f"```text\n/task {task.reference}\n```"
+        )
+        assert progress.content.endswith(milestone)
+        assert routine in [entry.summary for entry in task.recent_progress]
+        assert not any(isinstance(item.event, StreamDeltaEvent) for item in outbound)
+        release_child.set()
+        async with asyncio.timeout(5):
+            while True:
+                final = await loop.bus.consume_outbound()
+                if child_result in final.content:
+                    break
+    finally:
+        release_child.set()
+        unsubscribe()
+        loop.stop()
+        await asyncio.wait_for(worker, timeout=20)
 
 
 @pytest.mark.asyncio

@@ -101,7 +101,7 @@ for line in sys.stdin:
                     emit({"method": "item/completed", "params": {
                         "threadId": thread, "turnId": turn, "item": {
                             "type": "agentMessage", "phase": "commentary",
-                            "id": f"report-{n}", "text": f"Commentary stage {n}",
+                            "id": f"report-{n}", "text": ("[Milestone] " if n == 3 else "") + f"Commentary stage {n}",
                         },
                     }})
     if method == "turn/steer" and "with commentary" in text:
@@ -159,12 +159,17 @@ async def test_codex_waiting_task_resumes_same_thread_after_restart(tmp_path, co
             assert json.loads(await tool.execute(action="check"))["projects"] == {"beacon": str(repo)}
             result = json.loads(await tool.execute(
                 action="create", task="Compare candidates", label="Beacon evaluation", project="beacon",
+                receipt_summary="Compare the candidate windows.\n\n- 验收：Verify the selected window.",
             ))
         task_id = result["task_id"]
         receipt = await asyncio.wait_for(notices.get(), 5)
         question = await asyncio.wait_for(notices.get(), 5)
         ref = result["reference"]
-        assert receipt.content == f"✅ Codex · Beacon evaluation · Accepted by Codex\n\n```text\n/task {ref}\n```"
+        assert receipt.content == (
+            "【子任务】Codex\n\n**任务：** Beacon evaluation\n\n**当前状态：** queued（beacon）\n\n"
+            "Compare the candidate windows.\n\n- 验收：Verify the selected window.\n\n"
+            f"```text\n/task {ref}\n```"
+        )
         if channel == "weixin":
             from nanobot.channels.weixin.runtime import split_weixin_message
 
@@ -315,7 +320,8 @@ async def test_codex_continues_terminal_task_on_adopted_worktree_branch(tmp_path
                 reopened = json.loads(await CodexTaskTool(manager).execute(**continuation))
                 receipt = await notices.get()
                 finished = await notices.get()
-        assert "Accepted by Codex" in receipt.content
+        assert receipt.content.startswith("【子任务】Codex")
+        assert "独立 worktree，review/clean" in receipt.content
         assert f"```text\n/task {reopened['reference']}\n```" in receipt.content
         assert "Evaluated in the original thread" in finished.content
         restored = manager.check(reopened["task_id"], owner)
@@ -518,6 +524,13 @@ async def test_task_command_reads_codex_commentary_and_reports_steer(tmp_path, c
     )
     owner = "weixin:beacon"
     await sessions.state.get(owner)
+    notices = []
+
+    async def deliver(msg):
+        notices.append(msg)
+        return msg.metadata["task_notice_id"]
+
+    loop.subagents.send_task_notice = deliver
     try:
         task_ids = []
         for message_id in ("first", "second"):
@@ -545,6 +558,10 @@ async def test_task_command_reads_codex_commentary_and_reports_steer(tmp_path, c
         assert detail.startswith(f"【子任务｜进展】Codex [{ref}] · 实时预测阈值跨日实测\n\n")
         assert "Codex reported:" not in detail and detail.count("Commentary stage") == 3
         assert detail.index("Commentary stage 4") < detail.index("Commentary stage 3") < detail.index("Commentary stage 2")
+        task_notices = [msg for msg in notices if msg.metadata["task_notice_id"].startswith(task_id)]
+        assert len(task_notices) == 2
+        assert task_notices[0].content.startswith("【子任务】Codex")
+        assert task_notices[1].content.endswith("\n\nCommentary stage 3")
         assert "找不到" in await command(f"/task {ref}", sender="someone-else")
         assert "指定目标" in await command("/task send Use the new cutoff")
         assert not loop.subagents.check(task_id, owner).receipts

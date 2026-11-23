@@ -3,6 +3,7 @@
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,16 +18,23 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.config.paths import get_workspace_path
 from nanobot.security.workspace_access import current_tool_workspace
 
-_CURRENT_MESSAGE_SENDS: ContextVar[set[tuple[str, str]] | None] = ContextVar(
+
+@dataclass
+class MessageDeliveries:
+    sent: set[tuple[str, str]] = field(default_factory=set)
+    task_receipts: set[tuple[str, str]] = field(default_factory=set)
+
+
+_CURRENT_MESSAGE_SENDS: ContextVar[MessageDeliveries | None] = ContextVar(
     "message_sends",
     default=None,
 )
 
 
 @contextmanager
-def capture_message_deliveries() -> Generator[set[tuple[str, str]], None, None]:
+def capture_message_deliveries() -> Generator[MessageDeliveries, None, None]:
     """Record successful tool deliveries within one agent run."""
-    sends: set[tuple[str, str]] = set()
+    sends = MessageDeliveries()
     token = _CURRENT_MESSAGE_SENDS.set(sends)
     try:
         yield sends
@@ -34,10 +42,17 @@ def capture_message_deliveries() -> Generator[set[tuple[str, str]], None, None]:
         _CURRENT_MESSAGE_SENDS.reset(token)
 
 
-def record_message_delivery(channel: str, chat_id: str) -> None:
+def record_message_delivery(channel: str, chat_id: str, *, task_receipt: bool = False) -> None:
     sends = _CURRENT_MESSAGE_SENDS.get()
     if sends is not None:
-        sends.add((channel, chat_id))
+        sends.sent.add((channel, chat_id))
+        if task_receipt:
+            sends.task_receipts.add((channel, chat_id))
+
+
+def task_receipt_delivered(channel: str, chat_id: str) -> bool:
+    sends = _CURRENT_MESSAGE_SENDS.get()
+    return sends is not None and (channel, chat_id) in sends.task_receipts
 
 
 @tool_parameters(

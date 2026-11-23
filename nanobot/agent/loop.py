@@ -2341,7 +2341,7 @@ class AgentLoop:
         ctx.failure_error_kind = result.failure_error_kind
         if (
             ctx.kind is TurnKind.USER
-            and (ctx.delivery.route.channel, ctx.delivery.route.chat_id) in message_sends
+            and (ctx.delivery.route.channel, ctx.delivery.route.chat_id) in message_sends.sent
             and (not result.had_injections or result.stop_reason == "empty_final_response")
         ):
             ctx.suppress_response = True

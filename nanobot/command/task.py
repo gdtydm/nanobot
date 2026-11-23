@@ -52,10 +52,6 @@ def _one_line(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _backend_name(status: SubagentStatus) -> str:
-    return "Codex" if status.backend == "codex" else "Subagent"
-
-
 def _task_label(status: SubagentStatus) -> str:
     label = _TASK_LABEL_PREFIX.sub("", status.label.strip()) or status.task_description
     return task_display_text(_one_line(label, 100))
@@ -127,7 +123,7 @@ async def cmd_task(ctx: CommandContext) -> OutboundMessage:
                 return reply("活跃任务", "当前会话没有活跃任务。")
             lines: list[str] = []
             for task in tasks:
-                lines.append(f"{_task_label(task)} · {_backend_name(task)} · {_STATES[task.state]}")
+                lines.append(f"{_task_label(task)} · {task.backend_name} · {_STATES[task.state]}")
                 latest = task.recent_progress[-1].summary if task.recent_progress else task.progress
                 if latest:
                     lines.append(task_display_text(_one_line(_progress_text(task, latest), 120)))
@@ -149,7 +145,7 @@ async def cmd_task(ctx: CommandContext) -> OutboundMessage:
                 return reply("用法", _USAGE)
             target = await manager.resolve_task(args[0], ctx.key, sender_id=sender)
             if len(args) == 1:
-                heading = f"{_backend_name(target)} [{target.reference}] · {_task_label(target)}"
+                heading = f"{target.backend_name} [{target.reference}] · {_task_label(target)}"
                 return reply("进展", _task_detail(target, ZoneInfo(ctx.loop.context.timezone or "UTC")), heading=heading)
             instruction = args[2]
         input_id = ctx.msg.metadata.get("message_id") or ctx.msg.metadata.get(INBOUND_META_TURN_ID)
