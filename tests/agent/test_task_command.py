@@ -52,11 +52,11 @@ async def test_task_commands_work_during_a_turn_and_keep_details_in_the_child(lo
 
         calls["child"] += 1
         if calls["child"] == 1:
-            return LLMResponse(content=None, tool_calls=[report(n) for n in range(1, 5)])
+            return LLMResponse(content=None, tool_calls=[report(n) for n in range(1, 8)])
         if calls["child"] == 2:
             child_reporting.set()
             await release_child.wait()
-            return LLMResponse(content=None, tool_calls=[report(5)])
+            return LLMResponse(content=None, tool_calls=[report(8)])
         assert any(msg.get("content") == instruction for msg in messages)
         assert "Check the feature window" in str(messages)
         assert "continue with the remaining deliverables and acceptance criteria" in messages[0]["content"]
@@ -92,12 +92,12 @@ async def test_task_commands_work_during_a_turn_and_keep_details_in_the_child(lo
         ref = task.reference
 
         listed = await command("/task")
-        assert all(text in listed for text in (ref, "运行中", "Feature window", "Confirmed stage 4"))
+        assert all(text in listed for text in (ref, "运行中", "Feature window", "Confirmed stage 7"))
         assert f"```text\n/task {ref}\n```" in listed
         detail = await command(f"/task {ref}")
-        assert detail.index("Confirmed stage 4") < detail.index("Confirmed stage 3") < detail.index("Confirmed stage 2")
-        assert "Confirmed stage 1" not in detail and "Private detail 4" in detail
-        assert "当前阶段" in detail and "Verify phase 4" in detail
+        assert detail.index("Confirmed stage 7") < detail.index("Confirmed stage 6") < detail.index("Confirmed stage 2")
+        assert "Confirmed stage 1" not in detail and "Private detail 7" in detail
+        assert "当前阶段" in detail and "Verify phase 7" in detail
         checked = await loop.process_direct(f"/task {ref}", session_key=owner, channel=channel, chat_id=chat)
         assert checked.content == detail
         assert "找不到" in await command(f"/task {ref}", chat_id="another-chat")
@@ -109,9 +109,11 @@ async def test_task_commands_work_during_a_turn_and_keep_details_in_the_child(lo
         release_child.set()
         await asyncio.wait_for(steer_delivered.wait(), 5)
         detail = await command(f"/task {ref}")
-        assert "已送达" in detail and "Confirmed stage 5" in detail
+        assert "已送达" in detail and "Confirmed stage 8" in detail
         child = loop.subagents.sessions.status(task.task_id, owner)
-        assert [entry.key for entry in child.recent_progress] == ["stage-3", "stage-4", "stage-5"]
+        assert [entry.key for entry in child.recent_progress] == [
+            "stage-3", "stage-4", "stage-5", "stage-6", "stage-7", "stage-8",
+        ]
         assert child.private_receipts == {private_receipt_id}
 
         release_parent.set()

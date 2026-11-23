@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 import warnings
@@ -97,7 +98,14 @@ if TYPE_CHECKING:
 
 SUBAGENT_REPLY_FIRST_META = "_subagent_reply_first"
 SUBAGENT_ORIGIN_SENDER_META = "_subagent_origin_sender_id"
-_MILESTONE_PREFIX = "[Milestone] "
+_MILESTONE_PREFIX_RE = re.compile(r"^\[Milestone\](?:[:：\s]+)")
+
+
+def _split_milestone(text: str) -> tuple[bool, str]:
+    match = _MILESTONE_PREFIX_RE.match(text)
+    if match is None:
+        return False, text
+    return True, text[match.end():].strip()
 
 
 class _SubagentOrigin(TypedDict):
@@ -149,6 +157,7 @@ class _SubagentTask:
     suppress_notice: bool = False
     inbox: list[tuple[str, str]] = field(default_factory=list)
     reported_milestones: set[str] = field(default_factory=set)
+    last_milestone_notified_at: float | None = None
     input_received: asyncio.Event | None = None
     outcome: _SubagentOutcome | None = None
     exec_manager: ExecSessionManager = field(default_factory=ExecSessionManager)
@@ -279,8 +288,10 @@ class _SubagentHook(AgentHook):
             summary = item.text.strip()[:800]
             if not summary:
                 continue
-            milestone = summary.removeprefix(_MILESTONE_PREFIX).strip()
-            if self._status.record_progress(item.id or summary, milestone) and summary.startswith(_MILESTONE_PREFIX):
+            is_milestone, milestone = _split_milestone(summary)
+            if not milestone:
+                continue
+            if self._status.record_progress(item.id or summary, milestone) and is_milestone:
                 if self._on_milestone is not None:
                     await self._on_milestone(milestone)
 
@@ -288,14 +299,16 @@ class _SubagentHook(AgentHook):
 @tool_parameters(tool_parameters_schema(
     required=["summary"],
     summary=StringSchema(
-        "One or two sentences about what changed, with relevant evidence or next steps.",
+        "One or two concise sentences about what changed, with verified run IDs, artifacts, or next steps.",
         min_length=1, max_length=800,
     ),
     milestone=StringSchema("Optional stable key for deduplicating retries.", min_length=1, max_length=120),
-    detail=StringSchema("Optional detail shown in the task's on-demand log.", max_length=500),
+    detail=StringSchema("Optional detail shown in the task's on-demand /task log.", max_length=500),
     next_step=StringSchema("Optional next step shown in the task's on-demand status.", max_length=200),
     notify=BooleanSchema(description=(
-        "Send to the originating chat only for a verified milestone that materially advances a multi-step task."
+        "Leave false for normal /task timeline updates (including starting work, submitting jobs, waiting/polling, "
+        "intermediate debugging, and pre-final wrap-up). Set true only for a major verified stage completion or a "
+        "blocking failure that changes the plan."
     ), default=False),
 ))
 class _ReportProgressTool(Tool):
@@ -312,7 +325,12 @@ class _ReportProgressTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Record a brief progress update for /task when a meaningful milestone changes the situation."
+        return (
+            "Record a brief progress update into the /task timeline. Call silently (notify=false) at task start "
+            "and at meaningful phase changes (e.g. moving to edits/execution, submitting or monitoring a job, "
+            "diagnosing a failure, or verifying results), ideally alongside your next tool call in the same turn; "
+            "reserve notify=true for major verified stage completions or blocking failures."
+        )
 
     async def execute(
         self, *, summary: str = "", milestone: str = "", detail: str = "", next_step: str = "",
@@ -353,6 +371,8 @@ class _RequestInputTool(Tool):
 
 class SubagentManager:
     """Manages background subagent execution."""
+
+    MILESTONE_NOTIFY_COOLDOWN_S = 180.0
 
     def __init__(
         self,
@@ -1551,10 +1571,10 @@ class SubagentManager:
                 summary = text.strip()[:800]
                 item_id = item.get("id")
                 key = f"{status.codex_turn}:{item_id}" if isinstance(item_id, str) and item_id else summary
-                milestone = summary.removeprefix(_MILESTONE_PREFIX).strip()
-                if status.record_progress(key, f"Codex reported: {milestone}"):
+                is_milestone, milestone = _split_milestone(summary)
+                if milestone and status.record_progress(key, f"Codex reported: {milestone}"):
                     await self._save_status(status)
-                    if summary.startswith(_MILESTONE_PREFIX):
+                    if is_milestone:
                         await self._notify_milestone(record, milestone)
             return
         if kind not in {"commandExecution", "fileChange", "mcpToolCall", "webSearch"}:
@@ -1590,9 +1610,20 @@ class SubagentManager:
         return "Milestone recorded."
 
     async def _notify_milestone(self, record: _SubagentTask, summary: str) -> None:
-        if summary:
-            digest = sha256(" ".join(summary.split()).encode()).hexdigest()
-            await self._task_notice(record, f"progress:{digest}", summary)
+        if not summary:
+            return
+        digest = sha256(" ".join(summary.split()).encode()).hexdigest()
+        notice_kind = f"progress:{digest}"
+        if notice_kind in record.status.notice_ids:
+            return
+        now = time.monotonic()
+        if (
+            record.last_milestone_notified_at is not None
+            and (now - record.last_milestone_notified_at) < self.MILESTONE_NOTIFY_COOLDOWN_S
+        ):
+            return
+        if await self._task_notice(record, notice_kind, summary):
+            record.last_milestone_notified_at = now
 
     async def _request_native_input(self, record: _SubagentTask, question: str) -> str:
         record.raise_if_stopping()

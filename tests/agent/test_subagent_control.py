@@ -505,6 +505,61 @@ async def test_native_task_notifies_with_one_receipt_and_verified_milestone(loop
 
 
 @pytest.mark.asyncio
+async def test_milestone_notifications_respect_cooldown(loop_factory, monkeypatch):
+    loop = loop_factory()
+    owner = "feishu:throttle-owner"
+    await loop.sessions.state.get(owner)
+    notices = []
+
+    async def deliver(notice):
+        notices.append(notice)
+        return notice.metadata["task_notice_id"]
+
+    loop.subagents.send_task_notice = deliver
+    child_waiting = asyncio.Event()
+    release_child = asyncio.Event()
+    now = {"value": 1000.0}
+    monkeypatch.setattr("nanobot.agent.subagent.time.monotonic", lambda: now["value"])
+
+    async def respond(**kwargs):
+        tools = {tool["function"]["name"] for tool in kwargs.get("tools") or []}
+        if "report_progress" in tools:
+            child_waiting.set()
+            await release_child.wait()
+            return LLMResponse(content="Done.")
+        return LLMResponse(content="Parent ok.")
+
+    loop.provider.chat_stream_with_retry = respond
+    try:
+        await loop.subagents.spawn(
+            "Multi-step backfill", label="E2E", origin_channel="feishu", origin_chat_id="throttle-owner",
+            session_key=owner, runtime=loop.llm_runtime(),
+        )
+        await asyncio.wait_for(child_waiting.wait(), timeout=5)
+        _, record = next(iter(loop.subagents._tasks.items()))
+        # First milestone delivers immediately; second within cooldown is suppressed from chat but recorded in timeline.
+        await loop.subagents._report_progress(record, "m1", "Stage 1 verified", "private-1", "Run stage 2", True)
+        now["value"] += 30.0
+        await loop.subagents._report_progress(record, "m2", "Stage 2 verified", "private-2", "Run stage 3", True)
+        # Subsequent milestones past cooldown continue to deliver without an artificial per-task cap.
+        for idx in range(3, 7):
+            now["value"] += 200.0
+            await loop.subagents._report_progress(record, f"m{idx}", f"Stage {idx} verified", "", "", True)
+
+        progress_notices = [n for n in notices if n.metadata["task_notice_id"].endswith(":receipt") is False]
+        assert [n.content.split("\n\n", 1)[1] for n in progress_notices] == [
+            "Stage 1 verified", "Stage 3 verified", "Stage 4 verified", "Stage 5 verified", "Stage 6 verified",
+        ]
+        assert [e.summary for e in record.status.recent_progress] == [
+            "Stage 1 verified", "Stage 2 verified", "Stage 3 verified",
+            "Stage 4 verified", "Stage 5 verified", "Stage 6 verified",
+        ]
+    finally:
+        release_child.set()
+        await loop.subagents.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("child_finishes_first", [False, True], ids=["still-running", "already-queued"])
 async def test_reply_first_delivers_findings_then_background_results(loop_factory, monkeypatch, child_finishes_first):
     loop = loop_factory()

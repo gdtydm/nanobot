@@ -17,6 +17,7 @@ SubagentKind = Literal["general", "code_change"]
 ReviewDetail = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 ReviewIndex = Annotated[int, Field(strict=True, ge=1)]
 ReviewRecheckStatus = Literal["resolved", "open", "unverified", "superseded"]
+MAX_RECENT_PROGRESS = 6
 
 
 class SubagentSessionError(ValueError):
@@ -143,7 +144,8 @@ class SubagentStatus:
             return False
         self.progress, self.progress_at = summary, time.time()
         self.recent_progress = [
-            *self.recent_progress[-2:], TaskProgress(key, self.progress_at, summary, detail, next_step),
+            *self.recent_progress[-(MAX_RECENT_PROGRESS - 1):],
+            TaskProgress(key, self.progress_at, summary, detail, next_step),
         ]
         return True
 

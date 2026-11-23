@@ -556,8 +556,13 @@ async def test_task_command_reads_codex_commentary_and_reports_steer(tmp_path, c
         ref = task_id[:8]
         detail = await command(f"/task {ref}")
         assert detail.startswith(f"【子任务｜进展】Codex [{ref}] · 实时预测阈值跨日实测\n\n")
-        assert "Codex reported:" not in detail and detail.count("Commentary stage") == 3
-        assert detail.index("Commentary stage 4") < detail.index("Commentary stage 3") < detail.index("Commentary stage 2")
+        assert "Codex reported:" not in detail and detail.count("Commentary stage") == 4
+        assert (
+            detail.index("Commentary stage 4")
+            < detail.index("Commentary stage 3")
+            < detail.index("Commentary stage 2")
+            < detail.index("Commentary stage 1")
+        )
         task_notices = [msg for msg in notices if msg.metadata["task_notice_id"].startswith(task_id)]
         assert len(task_notices) == 2
         assert task_notices[0].content.startswith("【子任务】Codex")

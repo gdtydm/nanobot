@@ -123,6 +123,27 @@ async def test_streamed_tool_round_trip_retains_signed_native_parts_after_restor
 
 
 @pytest.mark.asyncio
+async def test_antigravity_captures_commentary_after_function_call(transport):
+    transport(lambda _: httpx.Response(200, text=sse([
+        {"text": "internal thought", "thought": True},
+        {"text": "[Milestone]: Backfill verified."},
+        {"functionCall": {"id": "call-1", "name": "echo", "args": {"value": 1}}, "thoughtSignature": "sig"},
+        {"text": "Checking downstream partitions next."},
+    ]), headers={"Content-Type": "text/event-stream"}))
+    provider = ag.AntigravityProvider(default_model="antigravity/gemini-4-neon-high")
+    result = await provider.chat_stream_with_context(
+        provider_context=ProviderCallContext(session_id="s1", capture_tool_commentary=True),
+        messages=[{"role": "user", "content": "run"}],
+        tools=TOOLS,
+    )
+    assert result.content is None
+    assert [item.text for item in result.commentary] == [
+        "[Milestone]: Backfill verified.\nChecking downstream partitions next.",
+    ]
+    assert result.reasoning_content == "internal thought"
+
+
+@pytest.mark.asyncio
 async def test_cleanly_framed_tool_stream_without_finish_reason_is_complete(transport):
     transport(lambda _: httpx.Response(200, text=sse([
         {"functionCall": {"name": "echo", "args": {"value": 7}}, "thoughtSignature": "signature"},

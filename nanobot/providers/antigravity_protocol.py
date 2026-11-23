@@ -354,11 +354,13 @@ class NativeResponse:
         commentary: tuple[ModelCommentary, ...] = ()
         content_parts = self.parts
         if capture_tool_commentary and reason == "tool_calls":
-            first_call = next(index for index, part in enumerate(self.parts) if "functionCall" in part)
-            progress = "".join(p.get("text", "") for p in self.parts[:first_call] if not p.get("thought")).strip()
+            progress = "\n".join(
+                text for p in self.parts
+                if not p.get("thought") and (text := p.get("text", "").strip())
+            )
             if progress:
                 commentary = (ModelCommentary(progress),)
-                content_parts = self.parts[first_call:]
+                content_parts = ()
         return LLMResponse(
             content="".join(p.get("text", "") for p in content_parts if not p.get("thought")) or None,
             commentary=commentary,
