@@ -11,8 +11,10 @@ import pytest
 
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.model_presets import build_static_preset_snapshot
-from nanobot.agent.subagent_review import ReviewWorktree
+from nanobot.agent.subagent_review import ReviewReadTool, ReviewSearchTool, ReviewWorktree
+from nanobot.agent.tools.base import ToolResult
 from nanobot.agent.tools.context import RequestContext, request_context
+from nanobot.agent.tools.exec_session import EVIDENCE_OUTPUT_CHARS, ExecSessionManager
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.subagent import SubagentTool
 from nanobot.agent.tools.subagent_config import (
@@ -100,7 +102,7 @@ class _ReviewScenario(LLMProvider):
     async def chat(self, messages, tools=None, **kwargs):
         names = {schema["function"]["name"] for schema in tools or []}
         last = messages[-1]
-        if names == {"read_review_file"}:
+        if names == {"read_review_file", "search_review_files"}:
             assert kwargs["model"] == self.review_model
             evidence = json.loads(messages[1]["content"])
             assert self.rule in messages[0]["content"]
@@ -110,13 +112,19 @@ class _ReviewScenario(LLMProvider):
             assert evidence["task"] == _TASK
             if self.rewrite_rules:
                 assert _CANDIDATE_RULE in evidence["working_diff"]
-            assert any(record["command"] == _COMMAND and record["exit_code"] == 0
-                       and record["matches_candidate"] for record in evidence["completed_commands"])
+            assert any(
+                record["command"] == _COMMAND and record["exit_code"] == 0
+                and record["matches_candidate"] and "Ran " in record["output_summary"]
+                for record in evidence["completed_commands"]
+            )
             if last["role"] != "tool":
                 self.review_started.set()
                 if self.wait_for_cancel:
                     await asyncio.Future()
-                return _call("read_review_file", path="test_normalize.py")
+                return _call("search_review_files", query="normalize(", path="test_normalize.py")
+            if last.get("name") == "search_review_files":
+                assert "test_normalize.py:" in last["content"]
+                return _call("read_review_file", path="test_normalize.py", start_line=1, end_line=20)
             previous = evidence["previous_findings"]
             if self.reviews:
                 assert len(previous) == 1
@@ -319,3 +327,135 @@ async def test_native_review_checks_original_trigger_despite_green_tests(
         assert (project.repository / "normalize.py").read_text().endswith("return value\n")
     finally:
         await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_review_read_tool_paginates_large_tracked_file(project):
+    repo = project.repository
+    lines = [f"value_{idx:03d} = '{'x' * 50}'" for idx in range(1, 401)]
+    (repo / "large.py").write_text("\n".join(lines) + "\n")
+    subprocess.run(["git", "-C", str(repo), "add", "large.py"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+         "commit", "-m", "add large file"],
+        check=True, capture_output=True,
+    )
+    (repo / "untracked.py").write_text("secret = 1\n")
+
+    tool = ReviewReadTool(repo)
+
+    head = await tool.execute(path="large.py")
+    assert not isinstance(head, ToolResult) or not head.is_error
+    assert head.startswith("1: value_001 = ")
+    assert "Call read_review_file with start_line=" in head
+    assert "of 400." in head
+
+    window = await tool.execute(path="large.py", start_line=350, end_line=355)
+    assert "350: value_350 = " in window
+    assert "355: value_355 = " in window
+    assert "356:" not in window
+    assert window.endswith("[Showing lines 350-355 of 400.]")
+
+    bad_range = await tool.execute(path="large.py", start_line=20, end_line=10)
+    assert isinstance(bad_range, ToolResult) and bad_range.is_error
+
+    past_eof = await tool.execute(path="large.py", start_line=401)
+    assert isinstance(past_eof, ToolResult) and past_eof.is_error
+
+    untracked = await tool.execute(path="untracked.py")
+    assert isinstance(untracked, ToolResult) and untracked.is_error
+
+
+@pytest.mark.asyncio
+async def test_review_search_tool_searches_tracked_files_only(project):
+    repo = project.repository
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    (pkg / "caller.py").write_text(
+        "from normalize import normalize\n"
+        "FLAG = '--strict-mode'\n"
+        "def run(v):\n"
+        "    return normalize(v)\n"
+    )
+    (repo / "untracked_notes.txt").write_text("normalize(v) --strict-mode\n")
+    subprocess.run(["git", "-C", str(repo), "add", "pkg/caller.py"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+         "commit", "-m", "add caller"],
+        check=True, capture_output=True,
+    )
+
+    tool = ReviewSearchTool(repo)
+
+    all_hits = await tool.execute(query="normalize(")
+    assert "pkg/caller.py:4:" in all_hits
+    assert "test_normalize.py:" in all_hits
+    assert "untracked_notes.txt" not in all_hits
+
+    scoped = await tool.execute(query="normalize(", path="pkg")
+    assert "pkg/caller.py:4:" in scoped
+    assert "test_normalize.py:" not in scoped
+
+    dash_query = await tool.execute(query="--strict-mode")
+    assert "pkg/caller.py:2:" in dash_query
+
+    regex_hits = await tool.execute(query=r"def[[:space:]]+(normalize|run)\(", regex=True)
+    assert "normalize.py:1:" in regex_hits
+    assert "pkg/caller.py:3:" in regex_hits
+
+    capped = await tool.execute(query="normalize", max_results=2)
+    assert "[Showing first 2 matches; refine query or path to see more.]" in capped
+
+    missing = await tool.execute(query="definitely_absent_symbol_xyz")
+    assert missing == "No matches found."
+
+    escaped = await tool.execute(query="normalize", path="../")
+    assert isinstance(escaped, ToolResult) and escaped.is_error
+
+
+@pytest.mark.asyncio
+async def test_exec_evidence_captures_bounded_tail_output_across_polls(tmp_path):
+    if sys.platform == "win32" or not shutil.which("python3"):
+        pytest.skip("requires POSIX shell and python3")
+
+    manager = ExecSessionManager()
+
+    async def version(_cwd: str) -> str:
+        return "v1"
+
+    manager.capture_version = version
+    try:
+        # Multi-poll command with large output ending in a recognizable test summary.
+        script = (
+            "import sys, time; "
+            f"print('noise-' * {EVIDENCE_OUTPUT_CHARS // 4}, flush=True); "
+            "time.sleep(0.25); "
+            "print('5 passed, 1 skipped in 0.25s', flush=True)"
+        )
+        session_id, first_poll = await manager.start(
+            command=[sys.executable, "-c", script],
+            cwd=str(tmp_path),
+            env={"PATH": shutil.which("python3") and str(Path(shutil.which("python3")).parent) or ""},
+            timeout=10,
+            shell_program=None,
+            login=False,
+            yield_time_ms=50,
+            max_output_chars=10_000,
+        )
+        while not first_poll.done:
+            first_poll = await manager.write(
+                session_id=session_id,
+                chars=None,
+                close_stdin=False,
+                terminate=False,
+                yield_time_ms=1000,
+                max_output_chars=10_000,
+            )
+        assert len(manager.evidence) == 1
+        evidence = manager.evidence[0]
+        assert evidence.version == "v1"
+        assert evidence.output_summary.startswith("...[truncated]\n")
+        assert "5 passed, 1 skipped in 0.25s" in evidence.output_summary
+        assert len(evidence.output_summary) <= EVIDENCE_OUTPUT_CHARS + len("...[truncated]\n")
+    finally:
+        await manager.close_all()

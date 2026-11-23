@@ -36,6 +36,7 @@ DEFAULT_UNTIL_EXIT_MS = 600_000
 MAX_WAIT_FOR_MS = 600_000
 DEFAULT_MAX_OUTPUT_CHARS = 10_000
 MAX_OUTPUT_CHARS = 50_000
+EVIDENCE_OUTPUT_CHARS = 1_200
 
 
 FinishReason = Literal[
@@ -95,6 +96,7 @@ class ExecEvidence:
     exit_code: int | None
     finish_reason: FinishReason | None
     version: str | None
+    output_summary: str = ""
 
 
 class _BoundedOutputBuffer:
@@ -194,6 +196,8 @@ class _ExecSession:
         self._execution_error: str | None = None
         self._stdout = _BoundedOutputBuffer(MAX_OUTPUT_CHARS)
         self._stderr = _BoundedOutputBuffer(MAX_OUTPUT_CHARS)
+        self._evidence_output = ""
+        self._evidence_truncated = False
         self._lock = asyncio.Lock()
         self._kill_task: asyncio.Task[None] | None = None
         self._stdout_task = asyncio.create_task(self._read_stream(process.stdout, self._stdout))
@@ -369,6 +373,8 @@ class _ExecSession:
         if stderr:
             output_parts.append(f"STDERR:\n{stderr}")
         output = "\n".join(output_parts)
+        if self.review_version is not None:
+            self._record_evidence_output(output, truncated=bool(stdout_truncated or stderr_truncated))
         output, response_truncated = _truncate_output(output, max_output_chars)
         now = time.monotonic()
         return _SessionPoll(
@@ -386,6 +392,25 @@ class _ExecSession:
             output_incomplete=self._output_incomplete,
             execution_error=self._execution_error,
         )
+
+    def _record_evidence_output(self, chunk: str, *, truncated: bool) -> None:
+        if truncated:
+            self._evidence_truncated = True
+        if not chunk:
+            return
+        combined = f"{self._evidence_output}\n{chunk}" if self._evidence_output else chunk
+        if len(combined) > EVIDENCE_OUTPUT_CHARS:
+            self._evidence_output = combined[-EVIDENCE_OUTPUT_CHARS:]
+            self._evidence_truncated = True
+        else:
+            self._evidence_output = combined
+
+    @property
+    def evidence_summary(self) -> str:
+        tail = self._evidence_output.strip()
+        if not tail:
+            return ""
+        return f"...[truncated]\n{tail}" if self._evidence_truncated else tail
 
     async def kill(self, reason: FinishReason = "cancelled") -> None:
         await self._begin_stop(reason)
@@ -442,6 +467,7 @@ class ExecSessionManager:
         self.evidence.append(ExecEvidence(
             session.command[:1000], session.cwd, poll.exit_code, poll.finish_reason,
             version if version == session.review_version else None,
+            session.evidence_summary,
         ))
 
     @property

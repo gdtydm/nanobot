@@ -30,6 +30,7 @@ from nanobot.agent.subagent_project import (
 from nanobot.agent.subagent_review import (
     MAX_REVISIONS,
     ReviewReadTool,
+    ReviewSearchTool,
     ReviewUnavailableError,
     ReviewVerdict,
     ReviewWorktree,
@@ -1676,6 +1677,7 @@ class SubagentManager:
     ) -> tuple[ReviewVerdict, LLMUsage | None]:
         tools = ToolRegistry()
         tools.register(ReviewReadTool(worktree.root))
+        tools.register(ReviewSearchTool(worktree.root))
         definitions = tools.get_definitions()
         result = await self.runner.run(AgentRunSpec(
             initial_messages=[
