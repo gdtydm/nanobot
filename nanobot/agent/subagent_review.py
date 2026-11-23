@@ -519,7 +519,10 @@ async def _git_grep(
 class ReviewReadTool(Tool):
     _plugin_discoverable = False
     name = "read_review_file"
-    description = "Read a tracked text file or line range in this worktree for review context."
+    description = (
+        "Read a tracked text file or line range in this worktree for review context "
+        "(use read_review_diff for untracked new files)."
+    )
     read_only = True
 
     def __init__(self, root: Path) -> None:

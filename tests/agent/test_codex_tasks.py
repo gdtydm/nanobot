@@ -298,6 +298,9 @@ async def test_codex_continues_terminal_task_on_adopted_worktree_branch(tmp_path
         assert manager.check(result["task_id"], owner).codex_thread == manager.check(original_id, owner).codex_thread
         assert notes.read_text() == "Local work from the first turn"
         assert json.loads(await use_tool("resume", **continuation))["task_id"] == result["task_id"]
+        assert json.loads(await use_tool(
+            "resume", **{**continuation, "resume_task_id": original_id[:8]},
+        ))["task_id"] == result["task_id"]
 
         git(path, "add", "notes.txt")
         git(path, "commit", "-qm", "Save local work")
@@ -466,7 +469,7 @@ async def test_codex_command_uses_shared_worker_from_direct_cli(tmp_path, codex_
     assert completed.model == "configured-model"
     assert reply is not None and "Evaluated in the original thread" in reply.content
     reply, continued = await run_once("Continue the evaluation", answer={
-        "action": "create", "resume_task_id": completed.task_id,
+        "action": "create", "resume_task_id": completed.reference,
         "task": "Check January with the updated criteria",
     })
     assert reply is not None and continued.reference in reply.content

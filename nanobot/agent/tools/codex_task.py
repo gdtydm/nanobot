@@ -28,8 +28,16 @@ def codex_task_available(request: RequestContext | None) -> bool:
     label=StringSchema("Short display label."),
     receipt_summary=TASK_RECEIPT_SUMMARY,
     project=StringSchema("Configured project to run in. Codex loads its own context in that checkout."),
-    worktree=BooleanSchema(description="Use true for an isolated project worktree; false uses the existing checkout."),
-    resume_task_id=StringSchema("Finished Codex task ID in this chat. Reuse its saved thread and checkout."),
+    worktree=BooleanSchema(
+        description=(
+            "For a project create: true uses an isolated Git worktree; false uses the existing checkout. "
+            "Set explicitly; if omitted, projects with a worktree script default to true."
+        ),
+    ),
+    resume_task_id=StringSchema(
+        "Full task ID or unique short reference of a finished Codex task in this chat. "
+        "Reuses its saved thread, project, and checkout (project and worktree are inherited automatically if omitted)."
+    ),
     base_ref=StringSchema("Git revision for a new worktree. Defaults to HEAD.", min_length=1),
     adopt_branch=StringSchema("With resume_task_id, adopt the named branch already checked out there."),
     task_id=StringSchema(
@@ -50,16 +58,14 @@ def codex_task_available(request: RequestContext | None) -> bool:
 class CodexTaskTool(Tool):
     name = "codex_task"
     description = (
-        "Create and manage Codex coding tasks. Prefer it for repository work that needs cross-file debugging, "
-        "edits and iterative tests when Codex has the necessary access. Use it when the user requests Codex "
-        "or when continuing a finished Codex task. For work that needs NanoBot-only tools, skills or identity, "
-        "use a native subagent instead. Codex reports questions and results in this chat or waits inline "
-        "when background delivery is unavailable. Use create with task to start work, or include resume_task_id "
-        "to continue a finished task. Use check to find Codex tasks and read status or results. Use send to add "
-        "instructions; for waiting_input, get question_id with check and include it with the answer. "
-        "Use cancel to stop a Codex task. If several tasks match, ask the user which one before sending or cancelling. "
-        "Supply receipt_summary for the background task card and do not repeat the card in your reply. "
-        "Verify the outcome before reporting completion."
+        "Create and manage Codex coding tasks. Codex runs in the target repository checkout and reports "
+        "questions and results in this chat, or waits inline when background delivery is unavailable.\n\n"
+        "Use create with task scope, constraints, and verification criteria, or pass resume_task_id to continue "
+        "a finished Codex task (project and worktree are inherited automatically). Use check to discover "
+        "configured projects, find Codex tasks, or read status and results. Use send to add instructions; for "
+        "waiting_input, get question_id with check and include it with the answer. Use cancel to stop a task. "
+        "If several tasks match, ask the user which one before sending or cancelling. Supply receipt_summary "
+        "for the background task card and do not repeat the card in your reply."
     )
 
     def __init__(self, manager: SubagentManager) -> None:

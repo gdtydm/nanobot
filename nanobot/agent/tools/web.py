@@ -1273,7 +1273,7 @@ class WebFetchTool(Tool):
 
     name = "web_fetch"  # pyright: ignore[reportIncompatibleMethodOverride, reportAssignmentType]
     description = (  # pyright: ignore[reportIncompatibleMethodOverride, reportAssignmentType]
-        "Fetch a URL as readable markdown/text. "
+        "Fetch a URL as readable markdown/text, or native image content for image URLs. "
         "May fail on login-walled or JavaScript-heavy pages."
     )
 

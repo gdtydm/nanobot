@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import platform
 import re
 import time
 import uuid
@@ -852,8 +853,8 @@ class SubagentManager:
         previous = None
         bound_worktree = None
         if resume_task_id is not None:
-            previous = self._owned_status(resume_task_id, owner)
-            self._check_codex_sender(previous, sender_id)
+            previous = await self.resolve_task(resume_task_id, owner, sender_id=sender_id)
+            resume_task_id = previous.task_id
             if previous.backend != backend:
                 raise SubagentControlError(f"resume_task_id must refer to a {backend} task")
             if previous.finished_at is None:
@@ -1032,10 +1033,20 @@ class SubagentManager:
         input_id = str(request.message_id or request.turn_id or "") or None
         async with self._codex_admission:
             if input_id:
+                resume_needle = resume_task_id.casefold().lstrip("#") if resume_task_id is not None else None
                 matches = [
                     status for status in (await self.read_statuses_for_session(owner)).values()
                     if status.backend == "codex" and status.origin_message_id == input_id
-                    and status.origin_sender_id == request.sender_id and status.resume_task_id == resume_task_id
+                    and status.origin_sender_id == request.sender_id
+                    and (
+                        (resume_needle is None and status.resume_task_id is None)
+                        or (
+                            resume_needle is not None and status.resume_task_id is not None
+                            and resume_needle in {
+                                status.resume_task_id.casefold(), status.resume_task_id[:8].casefold(),
+                            }
+                        )
+                    )
                     and (status.finished_at is None or status.state == "done"
                          or (status.base_ref == base_ref and status.adopt_branch == adopt_branch))
                 ]
@@ -1894,7 +1905,8 @@ class SubagentManager:
         ) is True
         if not native_commentary:
             tools.register(_ReportProgressTool(partial(self._report_progress, record)))
-        if record.announce and self.send_task_notice is not None and self.sessions is not None:
+        has_request_input = record.announce and self.send_task_notice is not None and self.sessions is not None
+        if has_request_input:
             tools.register(_RequestInputTool(partial(self._request_native_input, record)))
         observe_model_request = None
         trace_enabled = self.sessions is not None and record.session.policy.persist and record.session.policy.log_content
@@ -1902,6 +1914,7 @@ class SubagentManager:
             system_prompt = self._build_subagent_prompt(
                 workspace=root, project=status.project is not None, worktree=status.worktree is not None,
                 project_skill_roots=project_skill_roots, native_commentary=native_commentary,
+                has_request_input=has_request_input,
             )
         if self.sessions is not None and sources is not None:
             trace = SubagentRequestTrace(self.sessions.sessions.state, record.session, sources.sources)
@@ -2113,6 +2126,7 @@ class SubagentManager:
         worktree: bool = False,
         project_skill_roots: tuple[Path, ...] = (),
         native_commentary: bool = False,
+        has_request_input: bool = False,
     ) -> str:
         agent_workspace = self.workspace.expanduser().resolve()
         project_workspace = workspace.expanduser().resolve() if workspace else agent_workspace
@@ -2126,9 +2140,13 @@ class SubagentManager:
             if agent_workspace != project_workspace
             else "memory/history.jsonl"
         )
+        system = platform.system()
+        runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
         return render_template(
             "agent/subagent_system.md",
             track_source=True,
+            runtime=runtime,
+            platform_policy=render_template("agent/platform_policy.md", system=system),
             workspace=str(project_workspace),
             agent_workspace=str(agent_workspace),
             history_log=history_log,
@@ -2136,6 +2154,7 @@ class SubagentManager:
             project=project,
             worktree=worktree,
             commentary=native_commentary,
+            has_request_input=has_request_input,
             project_instructions=load_project_instructions(project_workspace) if project else "",
         )
 

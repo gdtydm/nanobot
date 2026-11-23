@@ -182,8 +182,13 @@ def test_subagent_prompt_uses_relative_paths_in_agent_workspace(tmp_path):
     prompt = manager._build_subagent_prompt()
 
     assert str(tmp_path.resolve()) not in prompt
+    assert "## Runtime" in prompt
     assert "History log: memory/history.jsonl" in prompt
     assert "### Workspace skills (`skills`)" in prompt
+    assert "request_input" not in prompt
+
+    interactive = manager._build_subagent_prompt(has_request_input=True)
+    assert "`request_input`" in interactive
 
 
 @pytest.mark.asyncio

@@ -212,6 +212,19 @@ class TestBundledToolContract:
         assert "# Tool Usage Notes" in prompt
         assert "clear user request as authorization" in prompt
 
+    def test_tool_contract_matches_available_tools(self, tmp_path):
+        native_only = ContextBuilder(tmp_path, available_tools=lambda: ["subagent"]).build_system_prompt()
+        assert "## Dependent work" in native_only
+        assert "## Project delegation" in native_only
+        assert "codex_task" not in native_only
+        assert "## Scheduling" not in native_only
+
+        with_all = ContextBuilder(
+            tmp_path, available_tools=lambda: ["subagent", "codex_task", "cron"],
+        ).build_system_prompt()
+        assert "codex_task" in with_all
+        assert "## Scheduling" in with_all
+
 
 class TestBuildUserContent:
     def test_no_media_returns_string(self, tmp_path):

@@ -1,6 +1,7 @@
 import base64
 import mimetypes
 import platform
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
@@ -72,11 +73,19 @@ class ContextBuilder:
 
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md"]
 
-    def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        timezone: str | None = None,
+        disabled_skills: list[str] | None = None,
+        *,
+        available_tools: Callable[[], Collection[str]] | None = None,
+    ):
         self.workspace = workspace
         self.timezone = timezone
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
+        self._available_tools = available_tools
 
     def build_system_prompt(
         self,
@@ -94,7 +103,14 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
-        parts.append(render_template("agent/tool_contract.md", track_source=True))
+        tool_names = set(self._available_tools()) if self._available_tools is not None else None
+        parts.append(render_template(
+            "agent/tool_contract.md",
+            track_source=True,
+            has_subagent=tool_names is None or "subagent" in tool_names,
+            has_codex=tool_names is None or "codex_task" in tool_names,
+            has_cron=tool_names is None or "cron" in tool_names,
+        ))
 
         project_path = root.expanduser().resolve()
         if project_path != self.workspace.expanduser().resolve():

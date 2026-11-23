@@ -47,9 +47,9 @@ if TYPE_CHECKING:
         ),
     ),
     resume_task_id=StringSchema(
-        "On create, pass the full ID of a finished native task in this conversation to reuse its project, "
-        "prepared worktree, and review baseline (project and worktree are inherited automatically if omitted). "
-        "Put remaining work in task."
+        "On create, pass the full task ID or unique short reference of a finished native task in this conversation "
+        "to reuse its project, prepared worktree, and review baseline (project and worktree are inherited "
+        "automatically if omitted). Put remaining work in task."
     ),
     base_ref=StringSchema(
         "Git revision for a new project worktree, such as origin/main or a commit ID. Defaults to HEAD.",
@@ -82,7 +82,7 @@ if TYPE_CHECKING:
     ),
     task_id=StringSchema(
         "Full task ID or short reference returned by create. For send/cancel, provide task_id or query. "
-        "Omit for check to list the current session's active and recently finished tasks.",
+        "Omit for check to list this conversation's active and recently finished tasks and configured projects.",
         min_length=1,
     ),
     message=StringSchema(
@@ -111,18 +111,17 @@ class SubagentTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Create and manage native NanoBot subagent tasks. Use create with the task scope, "
-            "constraints, and expected result. For configured projects, set project and worktree explicitly.\n\n"
-            "Native uses the parent model and NanoBot tools. Prefer it for work that needs NanoBot project skills, "
-            "tools or identity. Use wait=false for background work "
-            "when supported, or wait=true for an inline result. Native worktrees require background execution. To "
-            "continue in a finished task's prepared worktree, use create with resume_task_id (project and worktree "
-            "are inherited automatically). Give the new task the remaining work and relevant context.\n\n"
-            "Use send to add instructions to queued or running native tasks. "
-            "Use check to discover projects, find tasks, or read status and results by task_id. Use cancel to stop a task. "
-            "If several tasks match, ask the user which one before sending or cancelling. "
-            "Supported channels send a background task card and deliver results automatically. Supply receipt_summary "
-            "and do not repeat the card in your reply. Verify the outcome before reporting completion."
+            "Create and manage native NanoBot subagent tasks. Runs with the configured native subagent model "
+            "(or the parent model if unset) and NanoBot tools, skills, and identity.\n\n"
+            "Use create with task scope, constraints, and expected outputs; set project and worktree explicitly "
+            "for configured projects, or pass resume_task_id to continue in a finished task's prepared worktree "
+            "(project and worktree are inherited automatically). Use wait=false for background work when supported "
+            "(required for native worktrees) or wait=true for an inline result.\n\n"
+            "Use send to add instructions to queued or running native tasks, or to answer a task in waiting_input. "
+            "Use check to discover configured projects, find tasks, or read status and results. Use cancel to stop "
+            "a task. If several tasks match, ask the user which one before sending or cancelling. Supported channels "
+            "send a background task card and deliver results automatically; supply receipt_summary and do not repeat "
+            "the card in your reply."
         )
 
     @property
