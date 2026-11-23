@@ -11,7 +11,13 @@ import pytest
 
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.model_presets import build_static_preset_snapshot
-from nanobot.agent.subagent_review import ReviewReadTool, ReviewSearchTool, ReviewWorktree
+from nanobot.agent.subagent_review import (
+    ReviewDiffTool,
+    ReviewReadTool,
+    ReviewSearchTool,
+    ReviewWorktree,
+    review_input,
+)
 from nanobot.agent.tools.base import ToolResult
 from nanobot.agent.tools.context import RequestContext, request_context
 from nanobot.agent.tools.exec_session import EVIDENCE_OUTPUT_CHARS, ExecSessionManager
@@ -33,6 +39,7 @@ from nanobot.config.schema import (
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.session.manager import SessionManager
 from nanobot.utils.llm_runtime import LLMRuntime
+from nanobot.utils.subagent_channel_display import scrub_subagent_announce_body
 
 _TASK = 'Fix normalization so normalize(" ABC ") returns "abc". Verify the original input.'
 _TEST = "import unittest\nfrom normalize import normalize\n\n\nclass Cases(unittest.TestCase):\n"
@@ -94,6 +101,9 @@ class _ReviewScenario(LLMProvider):
         self.rewrite_rules = False
         self.cite_stale_command = False
         self.omit_recheck = False
+        self.malformed_once = False
+        self.repair_calls = 0
+        self.verify_only = False
         self.rule = _PROJECT_RULE
 
     def get_default_model(self):
@@ -102,7 +112,14 @@ class _ReviewScenario(LLMProvider):
     async def chat(self, messages, tools=None, **kwargs):
         names = {schema["function"]["name"] for schema in tools or []}
         last = messages[-1]
-        if names == {"read_review_file", "search_review_files"}:
+        is_review_call = "Review this candidate" in messages[0]["content"]
+        if is_review_call:
+            is_repair = last["role"] == "user" and "Your review verdict was rejected:" in last["content"]
+            if is_repair:
+                assert names == set()
+                self.repair_calls += 1
+            else:
+                assert names == {"read_review_file", "search_review_files", "read_review_diff"}
             assert kwargs["model"] == self.review_model
             evidence = json.loads(messages[1]["content"])
             assert self.rule in messages[0]["content"]
@@ -117,33 +134,40 @@ class _ReviewScenario(LLMProvider):
                 and record["matches_candidate"] and "Ran " in record["output_summary"]
                 for record in evidence["completed_commands"]
             )
-            if last["role"] != "tool":
+            if not is_repair and last["role"] != "tool":
                 self.review_started.set()
                 if self.wait_for_cancel:
                     await asyncio.Future()
                 return _call("search_review_files", query="normalize(", path="test_normalize.py")
-            if last.get("name") == "search_review_files":
+            if not is_repair and last.get("name") == "search_review_files":
                 assert "test_normalize.py:" in last["content"]
                 return _call("read_review_file", path="test_normalize.py", start_line=1, end_line=20)
+            read_result = next(
+                msg["content"] for msg in reversed(messages) if msg.get("role") == "tool" and msg.get("name") == "read_review_file"
+            )
             previous = evidence["previous_findings"]
-            if self.reviews:
+            if self.reviews and not is_repair:
                 assert len(previous) == 1
                 assert previous[0]["id"] == 1
                 assert previous[0]["requirement"] == "Normalize the original input"
-            else:
+            elif not self.reviews and not is_repair:
                 assert previous == []
-            if "test_original_trigger" in last["content"]:
+            if "test_original_trigger" in read_result:
                 assert "return value.strip().lower()" in evidence["working_diff"]
                 if self.before_pass is not None:
                     self.before_pass()
                     self.before_pass = None
-                self.reviews.append("pass")
+                if self.malformed_once and not is_repair:
+                    self.malformed_once = False
+                    return LLMResponse(content="Here is my verdict: not valid json")
+                if not is_repair:
+                    self.reviews.append("pass")
                 command_id = next(record["id"] for record in evidence["completed_commands"]
                                   if (not record["matches_candidate"] if self.cite_stale_command
                                       else record["matches_candidate"]))
                 return LLMResponse(content=json.dumps({
                     "verdict": "pass", "summary": "Original input is tested.",
-                    "rechecks": [] if self.omit_recheck else [
+                    "rechecks": [] if (self.omit_recheck or not previous) else [
                         {"finding_id": 1, "status": "resolved", "detail": "test_normalize.py:8 asserts the original input."},
                     ],
                     "verification": [
@@ -154,7 +178,8 @@ class _ReviewScenario(LLMProvider):
                     ],
                 }))
             assert "return value.lower()" in evidence["working_diff"]
-            self.reviews.append("changes_requested")
+            if not is_repair:
+                self.reviews.append("changes_requested")
             return LLMResponse(content=json.dumps({
                 "verdict": "changes_requested", "summary": "The green test misses surrounding whitespace.",
                 "findings": [] if previous else [
@@ -172,11 +197,15 @@ class _ReviewScenario(LLMProvider):
 
         assert kwargs["model"] == self.execution_model
         if last["role"] == "user":
+            if self.verify_only:
+                return _call("exec", command=_COMMAND, yield_time_ms=1000)
             is_rework = "internal review feedback" in last["content"]
             if is_rework:
                 if "changed during review" in last["content"]:
                     return _call("exec", command=_COMMAND, yield_time_ms=1000)
                 assert "Strip spaces and add a regression test" in last["content"]
+                if len(self.reviews) >= 2 and not self.rework_succeeds:
+                    assert "Latest review note: The original assertion is still missing." in last["content"]
                 if not self.rework_succeeds:
                     return _call("exec", command=_COMMAND, yield_time_ms=1000)
             expression = "value.strip().lower()" if is_rework else "value.lower()"
@@ -191,7 +220,7 @@ class _ReviewScenario(LLMProvider):
             return _call("exec", command=_COMMAND, yield_time_ms=1000)
         assert last_call["name"] == "exec"
         assert "Exit code: 0" in last["content"]
-        if not self.reviews:
+        if not self.reviews and not self.verify_only:
             assert "Ran 1 test" in last["content"]
             self.first_green = True
         elif self.rework_succeeds:
@@ -459,3 +488,171 @@ async def test_exec_evidence_captures_bounded_tail_output_across_polls(tmp_path)
         assert len(evidence.output_summary) <= EVIDENCE_OUTPUT_CHARS + len("...[truncated]\n")
     finally:
         await manager.close_all()
+
+
+@pytest.mark.asyncio
+async def test_native_resume_without_project_or_worktree_inherits_review_and_latest_state(tmp_path, project):
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    owner = "cli:resume-review"
+    sessions = SessionManager(workspace, sessions_root=tmp_path / "sessions")
+    await sessions.state.get(owner)
+    provider = _ReviewScenario(rework_succeeds=False, review_model="test-model", execution_model="test-model")
+    config = Config(
+        agents=AgentsConfig(defaults=AgentDefaults(
+            workspace=str(workspace), model="main-default", max_tool_iterations=7,
+        )),
+        tools=ToolsConfig(subagent=SubagentToolConfig(projects={"review": project})),
+    )
+    agent = AgentLoop.from_config(
+        config, MessageBus(), provider=provider, session_manager=sessions, tool_registry=ToolRegistry(),
+    )
+    manager = agent.subagents
+    runtime = LLMRuntime.capture(provider, provider.get_default_model(), context_window_tokens=65_536)
+    try:
+        with request_context(RequestContext("cli", "resume-review", session_key=owner, runtime=runtime, sender_id="owner")):
+            tool = SubagentTool(manager)
+            await tool.execute(action="create", task=_TASK, project="review", worktree=True, kind="code_change")
+            first_notice = await asyncio.wait_for(manager.bus.consume_inbound(), 20)
+            first_id = first_notice.metadata["subagent_task_id"]
+            assert f"Resume task ID: {first_id}" in first_notice.content
+            assert first_id not in scrub_subagent_announce_body(first_notice.content)
+
+            first_status = manager.check(first_id, owner)
+            assert first_status.state == "incomplete" and len(first_status.review_findings) == 1
+
+            # Resume with only resume_task_id (omitting project, worktree, and kind).
+            provider.rework_succeeds = True
+            resumed = await tool.execute(
+                action="create",
+                task=_TASK,
+                resume_task_id=first_id,
+            )
+            assert not isinstance(resumed, ToolResult) or not resumed.is_error
+            second_notice = await asyncio.wait_for(manager.bus.consume_inbound(), 20)
+            second_id = second_notice.metadata["subagent_task_id"]
+            second_status = manager.check(second_id, owner)
+            assert second_status.state == "done"
+            assert second_status.project == "review"
+            assert second_status.worktree == first_status.worktree
+            assert second_status.kind == "code_change"
+            assert second_status.review is not None and second_status.review.verdict == "pass"
+            assert second_status.review_findings == ()
+
+            # Resuming again via the older first_id must inherit latest bound_worktree (second_status)
+            # review state instead of resurrecting first_status's stale finding.
+            provider.reviews = []
+            provider.verify_only = True
+            resumed_third = await tool.execute(
+                action="create",
+                task=_TASK,
+                resume_task_id=first_id,
+            )
+            assert not isinstance(resumed_third, ToolResult) or not resumed_third.is_error
+            third_notice = await asyncio.wait_for(manager.bus.consume_inbound(), 20)
+            third_status = manager.check(third_notice.metadata["subagent_task_id"], owner)
+            assert third_status.state == "done"
+            assert third_status.review is not None and third_status.review.verdict == "pass"
+            assert third_status.review_findings == ()
+            assert third_status.review_base == second_status.review_base
+            assert third_status.worktree == second_status.worktree
+    finally:
+        await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_reviewer_self_corrects_malformed_verdict_in_one_retry(tmp_path, project):
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    owner = "cli:repair-review"
+    sessions = SessionManager(workspace, sessions_root=tmp_path / "sessions")
+    await sessions.state.get(owner)
+    provider = _ReviewScenario(rework_succeeds=True, review_model="test-model", execution_model="test-model")
+    provider.malformed_once = True
+    config = Config(
+        agents=AgentsConfig(defaults=AgentDefaults(
+            workspace=str(workspace), model="main-default", max_tool_iterations=7,
+        )),
+        tools=ToolsConfig(subagent=SubagentToolConfig(projects={"review": project})),
+    )
+    agent = AgentLoop.from_config(
+        config, MessageBus(), provider=provider, session_manager=sessions, tool_registry=ToolRegistry(),
+    )
+    manager = agent.subagents
+    runtime = LLMRuntime.capture(provider, provider.get_default_model(), context_window_tokens=65_536)
+    try:
+        with request_context(RequestContext("cli", "repair-review", session_key=owner, runtime=runtime, sender_id="owner")):
+            tool = SubagentTool(manager)
+            await tool.execute(action="create", task=_TASK, project="review", worktree=True, kind="code_change")
+            notice = await asyncio.wait_for(manager.bus.consume_inbound(), 20)
+            status = manager.check(notice.metadata["subagent_task_id"], owner)
+        assert provider.repair_calls == 1
+        assert status.state == "done"
+        assert status.review is not None and status.review.verdict == "pass"
+    finally:
+        await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_review_snapshot_handles_large_diff_and_binary_files_with_diff_tool(project):
+    repo = project.repository
+    (repo / "asset.bin").write_bytes(b"\x00\x01\x02\x03")
+    (repo / "big.py").write_text("base = 0\n")
+    subprocess.run(["git", "-C", str(repo), "add", "asset.bin", "big.py"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+         "commit", "-m", "add binary and big baseline"],
+        check=True, capture_output=True,
+    )
+    worktree = await ReviewWorktree.open(repo, None)
+
+    # Create a >32KB tracked diff, modify a binary file, and add both binary and text untracked files.
+    big_lines = [f"entry_{i:04d} = '{'a' * 70}'" for i in range(1, 700)]
+    (repo / "big.py").write_text("\n".join(big_lines) + "\n")
+    (repo / "asset.bin").write_bytes(b"\x00\x01\x02\xff")
+    (repo / "new_image.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00")
+    (repo / "new_large.txt").write_text("\n".join(f"line {i}" for i in range(1, 500)) + "\n")
+
+    candidate = await worktree.snapshot()
+    assert candidate.changed
+    assert candidate.changes_omitted
+    assert candidate.changes == ""
+    assert candidate.changes_bytes > 32_000
+    assert candidate.new_files == {}
+    by_path = {entry["path"]: entry for entry in candidate.changed_files}
+    assert by_path["asset.bin"]["binary"] is True
+    assert by_path["big.py"]["binary"] is False and by_path["big.py"]["added"] > 600
+    omitted_by_path = {entry["path"]: entry for entry in candidate.omitted_new_files}
+    assert omitted_by_path["new_image.png"]["reason"] == "binary"
+    assert omitted_by_path["new_large.txt"]["reason"] == "on_demand"
+
+    payload = json.loads(review_input(
+        "Update big file and assets", [], "done", candidate, (),
+        previous_findings=(), requirements_changed=False,
+    ))
+    assert payload["working_diff"] == ""
+    assert payload["working_diff_omitted"] is True
+    assert payload["working_diff_bytes"] == candidate.changes_bytes
+    assert any(entry["path"] == "asset.bin" and entry["binary"] for entry in payload["changed_files"])
+    assert any(entry["path"] == "new_image.png" for entry in payload["omitted_new_files"])
+
+    # Fingerprint must still detect a 1-byte change in binary or tail of omitted file.
+    (repo / "new_image.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x01")
+    assert (await worktree.snapshot()).fingerprint != candidate.fingerprint
+
+    # ReviewDiffTool paginates the large tracked diff, omitted untracked text file, and handles binaries safely.
+    diff_tool = ReviewDiffTool(repo, worktree.base)
+    big_diff_head = await diff_tool.execute(path="big.py")
+    assert "Call read_review_diff with start_line=" in big_diff_head
+    big_diff_tail = await diff_tool.execute(path="big.py", start_line=650, end_line=660)
+    assert "entry_06" in big_diff_tail
+
+    untracked_slice = await diff_tool.execute(path="new_large.txt", start_line=400, end_line=405)
+    assert "400: line 400" in untracked_slice
+    assert "405: line 405" in untracked_slice
+
+    binary_msg = await diff_tool.execute(path="new_image.png")
+    assert "Binary file" in binary_msg
+
+    escaped = await diff_tool.execute(path="../outside.py")
+    assert isinstance(escaped, ToolResult) and escaped.is_error

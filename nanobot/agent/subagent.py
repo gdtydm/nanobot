@@ -20,7 +20,7 @@ from nanobot.agent.codex_task import CodexTaskError, CodexTurn
 from nanobot.agent.hook import AgentHook, AgentHookContext
 from nanobot.agent.hooks import create_file_edit_activity_hook
 from nanobot.agent.project_instructions import load_project_instructions
-from nanobot.agent.runner import AgentRunner, AgentRunSpec
+from nanobot.agent.runner import AgentRunner, AgentRunResult, AgentRunSpec
 from nanobot.agent.session_activity import SessionActivity
 from nanobot.agent.skills import SkillsLoader, project_skill_root
 from nanobot.agent.subagent_project import (
@@ -30,6 +30,7 @@ from nanobot.agent.subagent_project import (
 )
 from nanobot.agent.subagent_review import (
     MAX_REVISIONS,
+    ReviewDiffTool,
     ReviewReadTool,
     ReviewSearchTool,
     ReviewUnavailableError,
@@ -41,6 +42,7 @@ from nanobot.agent.subagent_review import (
 )
 from nanobot.agent.subagent_sessions import SubagentSessions
 from nanobot.agent.subagent_status import (
+    ReviewFinding,
     SubagentBackend,
     SubagentKind,
     SubagentReview,
@@ -836,10 +838,9 @@ class SubagentManager:
                 raise SubagentControlError(f"resume_task_id must refer to a {backend} task")
             if previous.finished_at is None:
                 raise SubagentControlError("resume_task_id requires a finished task")
-            if backend == "codex":
-                if project is None:
-                    project = previous.project
-            elif previous.worktree_id is None or project is None:
+            if project is None:
+                project = previous.project
+            if backend == "native" and (previous.worktree_id is None or project is None):
                 raise SubagentControlError("native resume requires a configured project and a prepared worktree")
             if project != previous.project:
                 raise SubagentControlError("resume must use the previous task's project")
@@ -902,6 +903,7 @@ class SubagentManager:
                 if self._worktree_in_use(worktree_id):
                     raise SubagentControlError("the project worktree already has a task in progress")
                 self._admitting_worktrees.add(worktree_id)
+        review_source = bound_worktree or previous
         status = SubagentStatus(
             task_id=task_id,
             revision=1,
@@ -920,10 +922,10 @@ class SubagentManager:
             adopt_branch=adopt_branch,
             reply_first=reply_first,
             backend=backend,
-            kind=kind if kind is not None else previous.kind if previous is not None and backend == "native" else "general",
-            review_base=previous.review_base if previous is not None and adopt_branch is None else None,
-            review_rules=previous.review_rules if previous is not None and adopt_branch is None else None,
-            review_findings=previous.review_findings if previous is not None and adopt_branch is None else (),
+            kind=kind if kind is not None else review_source.kind if review_source is not None and backend == "native" else "general",
+            review_base=review_source.review_base if review_source is not None and adopt_branch is None else None,
+            review_rules=review_source.review_rules if review_source is not None and adopt_branch is None else None,
+            review_findings=review_source.review_findings if review_source is not None and adopt_branch is None else (),
             origin_sender_id=sender_id if backend == "codex" else None,
             origin_generation=origin_generation,
             origin_channel=origin_channel if backend == "codex" else None,
@@ -1681,27 +1683,33 @@ class SubagentManager:
                     requirements_changed = bool(set(followups) - reviewed_followups) or (
                         review_round == 1 and status.resume_task_id is not None
                     )
-                    verdict, usage = await self._review_native_candidate(record, worktree, review_runtime, review_input(
-                        status.task_description, followups, outcome.result, candidate, commands,
-                        previous_findings=previous_findings, requirements_changed=requirements_changed,
-                    ))
-                    total_usage = self._sum_usage(total_usage, usage)
-                    status.usage = total_usage
-                    if ((await worktree.snapshot()).fingerprint != candidate_id
-                            or record.inbox or record.exec_manager.has_pending_work):
-                        feedback = "The worktree or user requirements changed during review. Verify the current candidate."
-                    else:
-                        status.review, pending = verdict.confirm(
+                    verdict, confirmed, usage = await self._review_native_candidate(
+                        record,
+                        worktree,
+                        review_runtime,
+                        review_input(
+                            status.task_description, followups, outcome.result, candidate, commands,
+                            previous_findings=previous_findings, requirements_changed=requirements_changed,
+                        ),
+                        candidate_id=candidate_id,
+                        confirm=lambda item: item.confirm(
                             round_number=review_round, candidate_id=candidate_id, commands=commands,
                             previous_findings=previous_findings, requirements_changed=requirements_changed,
-                        )
+                        ),
+                    )
+                    total_usage = self._sum_usage(total_usage, usage)
+                    status.usage = total_usage
+                    if verdict is None or confirmed is None:
+                        feedback = "The worktree or user requirements changed during review. Verify the current candidate."
+                    else:
+                        status.review, pending = confirmed
                         if verdict.verdict == "inconclusive":
                             raise ReviewUnavailableError(verdict.summary)
                         status.review_findings = pending
                         reviewed_followups.update(followups)
                         if verdict.verdict == "pass":
                             return outcome
-                        feedback = review_feedback(pending)
+                        feedback = review_feedback(pending, rechecks=status.review.rechecks)
                         status.review = replace(status.review, summary=feedback)
                 if attempt == MAX_REVISIONS:
                     raise ReviewUnavailableError(f"Automatic review reached its revision limit. {feedback}")
@@ -1726,34 +1734,92 @@ class SubagentManager:
         return left + right if left is not None and right is not None else left or right
 
     async def _review_native_candidate(
-        self, record: _SubagentTask, worktree: ReviewWorktree, runtime: LLMRuntime, evidence: str,
-    ) -> tuple[ReviewVerdict, LLMUsage | None]:
+        self,
+        record: _SubagentTask,
+        worktree: ReviewWorktree,
+        runtime: LLMRuntime,
+        evidence: str,
+        *,
+        candidate_id: str,
+        confirm: Callable[[ReviewVerdict], tuple[SubagentReview, tuple[ReviewFinding, ...]]],
+    ) -> tuple[ReviewVerdict | None, tuple[SubagentReview, tuple[ReviewFinding, ...]] | None, LLMUsage | None]:
         tools = ToolRegistry()
         tools.register(ReviewReadTool(worktree.root))
         tools.register(ReviewSearchTool(worktree.root))
+        tools.register(ReviewDiffTool(worktree.root, worktree.base))
         definitions = tools.get_definitions()
-        result = await self.runner.run(AgentRunSpec(
-            initial_messages=[
+
+        async def _run_review(
+            initial_messages: list[dict[str, Any]],
+            *,
+            run_tools: ToolRegistry,
+            tool_defs: list[dict[str, Any]],
+            max_iterations: int,
+        ) -> AgentRunResult:
+            return await self.runner.run(AgentRunSpec(
+                initial_messages=initial_messages,
+                tools=run_tools, runtime=runtime, max_iterations=max_iterations,
+                max_tool_result_chars=self.max_tool_result_chars,
+                finalize_on_max_iterations=False, error_message=None,
+                consolidate_history=partial(
+                    self.consolidator.summarize_transcript, runtime=runtime,
+                    session_key=record.session.key, tools=tool_defs, persist=False,
+                ),
+                consolidate_provider_compaction=partial(
+                    self.consolidator.summarize_provider_compaction, runtime=runtime,
+                    session_key=record.session.key, tools=tool_defs, persist=False,
+                ),
+                llm_usage_source=record.origin.get("llm_usage_source"),
+            ))
+
+        async def _candidate_stale() -> bool:
+            return (
+                (await worktree.snapshot()).fingerprint != candidate_id
+                or bool(record.inbox)
+                or record.exec_manager.has_pending_work
+            )
+
+        result = await _run_review(
+            [
                 {"role": "system", "content": review_system_prompt(record.status.review_rules or "")},
                 {"role": "user", "content": evidence},
             ],
-            tools=tools, runtime=runtime, max_iterations=6,
-            max_tool_result_chars=self.max_tool_result_chars,
-            finalize_on_max_iterations=False, error_message=None,
-            consolidate_history=partial(
-                self.consolidator.summarize_transcript, runtime=runtime,
-                session_key=record.session.key, tools=definitions, persist=False,
-            ),
-            consolidate_provider_compaction=partial(
-                self.consolidator.summarize_provider_compaction, runtime=runtime,
-                session_key=record.session.key, tools=definitions, persist=False,
-            ),
-            llm_usage_source=record.origin.get("llm_usage_source"),
-        ))
+            run_tools=tools, tool_defs=definitions, max_iterations=10,
+        )
         record.raise_if_stopping()
+        usage = result.usage
+        if await _candidate_stale():
+            return None, None, usage
         if result.stop_reason != "completed" or not result.final_content:
             raise ReviewUnavailableError("The reviewer ended without completing the review.")
-        return ReviewVerdict.parse(result.final_content), result.usage
+        try:
+            verdict = ReviewVerdict.parse(result.final_content)
+            confirmed = confirm(verdict)
+            return verdict, confirmed, usage
+        except ReviewUnavailableError as exc:
+            repair_messages = [
+                *result.messages,
+                {
+                    "role": "user",
+                    "content": (
+                        f"Your review verdict was rejected: {exc}\n"
+                        "Return only the corrected JSON object matching the required schema "
+                        "(verdict, summary, findings, verification, rechecks) with no extra prose."
+                    ),
+                },
+            ]
+            retry = await _run_review(
+                repair_messages, run_tools=ToolRegistry(), tool_defs=[], max_iterations=1,
+            )
+            record.raise_if_stopping()
+            usage = self._sum_usage(usage, retry.usage)
+            if await _candidate_stale():
+                return None, None, usage
+            if retry.stop_reason != "completed" or not retry.final_content:
+                raise exc
+            verdict = ReviewVerdict.parse(retry.final_content)
+            confirmed = confirm(verdict)
+            return verdict, confirmed, usage
 
     async def _run_admitted_subagent(
         self, record: _SubagentTask, *, review_feedback: str | None = None,
@@ -1953,6 +2019,7 @@ class SubagentManager:
 
         announce_content = render_template(
             "agent/subagent_announce.md",
+            task_id=task_id,
             label=label,
             status_text=status_text,
             task=task,

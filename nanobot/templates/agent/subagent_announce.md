@@ -6,6 +6,9 @@ Project: {{ project }}
 {% if worktree %}
 Worktree: {{ worktree }}
 Branch: {{ branch }}
+{% if task_id %}
+Resume task ID: {{ task_id }}
+{% endif %}
 {% endif %}
 {% endif %}
 

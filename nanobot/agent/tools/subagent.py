@@ -47,8 +47,9 @@ if TYPE_CHECKING:
         ),
     ),
     resume_task_id=StringSchema(
-        "On create, pass the full ID of a finished native task in this conversation. Use the original "
-        "project and its prepared worktree. Put remaining work in task."
+        "On create, pass the full ID of a finished native task in this conversation to reuse its project, "
+        "prepared worktree, and review baseline (project and worktree are inherited automatically if omitted). "
+        "Put remaining work in task."
     ),
     base_ref=StringSchema(
         "Git revision for a new project worktree, such as origin/main or a commit ID. Defaults to HEAD.",
@@ -115,8 +116,8 @@ class SubagentTool(Tool):
             "Native uses the parent model and NanoBot tools. Prefer it for work that needs NanoBot project skills, "
             "tools or identity. Use wait=false for background work "
             "when supported, or wait=true for an inline result. Native worktrees require background execution. To "
-            "continue in a finished task's prepared worktree, use create with the original project and resume_task_id. "
-            "Give the new task the remaining work and relevant context.\n\n"
+            "continue in a finished task's prepared worktree, use create with resume_task_id (project and worktree "
+            "are inherited automatically). Give the new task the remaining work and relevant context.\n\n"
             "Use send to add instructions to queued or running native tasks. "
             "Use check to discover projects, find tasks, or read status and results by task_id. Use cancel to stop a task. "
             "If several tasks match, ask the user which one before sending or cancelling. "
