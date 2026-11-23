@@ -69,6 +69,28 @@ export type RoundUsage = TurnUsage;
 
 export type SubagentTaskState = "queued" | "running" | "waiting_input" | "stopping" | "done" | "incomplete" | "error" | "cancelled" | "interrupted";
 
+export interface SubagentReviewVerification {
+  requirement: string;
+  detail: string;
+  source: "static" | "command" | "unverified";
+  path: string | null;
+  line: number | null;
+  command_id: number | null;
+}
+
+export interface SubagentReviewSnapshot {
+  verdict: "pass" | "changes_requested" | "inconclusive" | "skipped";
+  summary: string;
+  round: number;
+  candidate: string | null;
+  verification?: SubagentReviewVerification[];
+  rechecks?: {
+    finding: { requirement: string; trigger: string };
+    status: "resolved" | "open" | "unverified" | "superseded";
+    detail: string;
+  }[];
+}
+
 export interface SubagentTaskSnapshot {
   task_id: string;
   revision?: number;
@@ -95,6 +117,7 @@ export interface SubagentTaskSnapshot {
   progress_at?: number | null;
   question?: string | null;
   model?: string | null;
+  review?: SubagentReviewSnapshot | null;
 }
 
 export interface SubagentTasksPayload {

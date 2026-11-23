@@ -1852,6 +1852,29 @@
       "running": "Em andamento: {{count}}",
       "finished": "Encerradas: {{count}}",
       "completed": "Concluídas: {{count}}",
+      "review": {
+        "previousFindings": "Constatações anteriores",
+        "recheck": {
+          "resolved": "Resolvido",
+          "open": "Ainda em aberto",
+          "unverified": "Não verificado",
+          "superseded": "Substituído"
+        },
+        "title": "Evidências da revisão",
+        "round": "Rodada {{round}}",
+        "command": "O comando nº {{id}} foi concluído com sucesso",
+        "verdict": {
+          "pass": "Aprovado",
+          "changes_requested": "Alterações solicitadas",
+          "inconclusive": "Inconclusivo",
+          "skipped": "Ignorado"
+        },
+        "source": {
+          "static": "Inspeção estática",
+          "command": "Evidência de execução nesta versão",
+          "unverified": "Não verificado"
+        }
+      },
       "needsReview": "Revisar: {{count}}"
     },
     "compaction": {

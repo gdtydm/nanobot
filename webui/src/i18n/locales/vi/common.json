@@ -1850,6 +1850,29 @@
       "running": "Đang chạy: {{count}}",
       "finished": "Đã kết thúc: {{count}}",
       "completed": "Đã hoàn thành: {{count}}",
+      "review": {
+        "previousFindings": "Phát hiện trước đó",
+        "recheck": {
+          "resolved": "Đã xử lý",
+          "open": "Vẫn còn",
+          "unverified": "Chưa xác minh",
+          "superseded": "Đã được thay thế"
+        },
+        "title": "Bằng chứng rà soát",
+        "round": "Vòng {{round}}",
+        "command": "Lệnh số {{id}} đã hoàn tất thành công",
+        "verdict": {
+          "pass": "Đạt",
+          "changes_requested": "Yêu cầu sửa",
+          "inconclusive": "Chưa thể kết luận",
+          "skipped": "Đã bỏ qua"
+        },
+        "source": {
+          "static": "Kiểm tra tĩnh",
+          "command": "Bằng chứng chạy trên bản này",
+          "unverified": "Chưa xác minh"
+        }
+      },
       "needsReview": "Cần kiểm tra: {{count}}"
     },
     "compaction": {

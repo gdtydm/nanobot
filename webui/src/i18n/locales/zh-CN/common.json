@@ -2032,6 +2032,29 @@
       "running": "{{count}} 项进行中",
       "finished": "{{count}} 项已结束",
       "completed": "{{count}} 项已完成",
+      "review": {
+        "previousFindings": "上一轮问题",
+        "recheck": {
+          "resolved": "已解决",
+          "open": "仍存在",
+          "unverified": "尚未验证",
+          "superseded": "已因需求变更失效"
+        },
+        "title": "审查依据",
+        "round": "第 {{round}} 轮",
+        "command": "命令 #{{id}} 正常退出",
+        "verdict": {
+          "pass": "通过",
+          "changes_requested": "需要修改",
+          "inconclusive": "无法确认",
+          "skipped": "已跳过"
+        },
+        "source": {
+          "static": "静态检查",
+          "command": "本轮候选的命令证据",
+          "unverified": "尚未验证"
+        }
+      },
       "needsReview": "{{count}} 项需检查"
     },
     "compaction": {

@@ -1850,6 +1850,29 @@
       "running": "En curso: {{count}}",
       "finished": "Finalizadas: {{count}}",
       "completed": "Completadas: {{count}}",
+      "review": {
+        "previousFindings": "Hallazgos anteriores",
+        "recheck": {
+          "resolved": "Resuelto",
+          "open": "Pendiente",
+          "unverified": "Sin verificar",
+          "superseded": "Sustituido"
+        },
+        "title": "Evidencia de revisión",
+        "round": "Ronda {{round}}",
+        "command": "El comando n.º {{id}} finalizó correctamente",
+        "verdict": {
+          "pass": "Aprobado",
+          "changes_requested": "Cambios solicitados",
+          "inconclusive": "Sin conclusión",
+          "skipped": "Omitido"
+        },
+        "source": {
+          "static": "Inspección estática",
+          "command": "Evidencia de ejecución en este candidato",
+          "unverified": "Sin verificar"
+        }
+      },
       "needsReview": "Revisar: {{count}}"
     },
     "compaction": {

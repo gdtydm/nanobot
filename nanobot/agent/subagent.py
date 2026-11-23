@@ -29,12 +29,13 @@ from nanobot.agent.subagent_project import (
 )
 from nanobot.agent.subagent_review import (
     MAX_REVISIONS,
-    REVIEW_INSTRUCTIONS,
     ReviewReadTool,
     ReviewUnavailableError,
     ReviewVerdict,
     ReviewWorktree,
+    review_feedback,
     review_input,
+    review_system_prompt,
 )
 from nanobot.agent.subagent_sessions import SubagentSessions
 from nanobot.agent.subagent_status import (
@@ -906,6 +907,8 @@ class SubagentManager:
             backend=backend,
             kind=kind if kind is not None else previous.kind if previous is not None and backend == "native" else "general",
             review_base=previous.review_base if previous is not None and adopt_branch is None else None,
+            review_rules=previous.review_rules if previous is not None and adopt_branch is None else None,
+            review_findings=previous.review_findings if previous is not None and adopt_branch is None else (),
             origin_sender_id=sender_id if backend == "codex" else None,
             origin_generation=origin_generation,
             origin_channel=origin_channel if backend == "codex" else None,
@@ -1570,6 +1573,7 @@ class SubagentManager:
             return await self._run_admitted_subagent(record)
 
         review_round = 0
+        reviewed_followups: set[str] = set()
         review_runtime = record.parent_runtime or record.runtime
         assert review_runtime is not None
         candidate_id = None
@@ -1577,7 +1581,9 @@ class SubagentManager:
         try:
             try:
                 worktree = await ReviewWorktree.open(Path(status.worktree), status.review_base)
-            except (OSError, TimeoutError, ReviewUnavailableError) as exc:
+                if status.review_rules is None:
+                    status.review_rules = await worktree.project_rules(from_baseline=status.review_base is not None)
+            except (OSError, TimeoutError, ValueError, ReviewUnavailableError) as exc:
                 outcome = await self._run_admitted_subagent(record)
                 if outcome.state != "done":
                     return outcome
@@ -1585,7 +1591,9 @@ class SubagentManager:
             status.review_base = worktree.base
             await self._save_status(status)
             record.exec_manager.capture_version = worktree.command_version
-            outcome = await self._run_admitted_subagent(record)
+            outcome = await self._run_admitted_subagent(
+                record, review_feedback=review_feedback(status.review_findings) or None,
+            )
             total_usage = status.usage
             for attempt in range(MAX_REVISIONS + 1):
                 if outcome.state != "done":
@@ -1609,30 +1617,38 @@ class SubagentManager:
                         except (KeyError, ValueError) as exc:
                             raise ReviewUnavailableError(f"Could not load the review model: {exc}") from exc
                     review_round += 1
+                    commands = tuple(record.exec_manager.evidence)
+                    followups = [
+                        message["content"] for message in record.session.messages
+                        if message.get("role") == "user" and HIDDEN_HISTORY_META not in message
+                        and isinstance(message.get("content"), str) and message["content"] != status.task_description
+                    ]
+                    previous_findings = status.review_findings
+                    requirements_changed = bool(set(followups) - reviewed_followups) or (
+                        review_round == 1 and status.resume_task_id is not None
+                    )
                     verdict, usage = await self._review_native_candidate(record, worktree, review_runtime, review_input(
-                        status.task_description,
-                        [message["content"] for message in record.session.messages
-                         if message.get("role") == "user" and HIDDEN_HISTORY_META not in message
-                         and isinstance(message.get("content"), str) and message["content"] != status.task_description],
-                        outcome.result, candidate, record.exec_manager.evidence,
+                        status.task_description, followups, outcome.result, candidate, commands,
+                        previous_findings=previous_findings, requirements_changed=requirements_changed,
                     ))
                     total_usage = self._sum_usage(total_usage, usage)
                     status.usage = total_usage
                     if ((await worktree.snapshot()).fingerprint != candidate_id
                             or record.inbox or record.exec_manager.has_pending_work):
                         feedback = "The worktree or user requirements changed during review. Verify the current candidate."
-                    elif verdict.verdict == "pass":
-                        status.review = SubagentReview("pass", verdict.summary, review_round, candidate_id)
-                        return outcome
-                    elif verdict.verdict == "inconclusive":
-                        raise ReviewUnavailableError(verdict.summary)
                     else:
-                        feedback = "\n".join(
-                            f"{item.path}{f':{item.line}' if item.line is not None else ''} · {item.requirement}\n"
-                            f"Trigger: {item.trigger}\nRequested change: {item.change}"
-                            for item in verdict.findings
+                        status.review, pending = verdict.confirm(
+                            round_number=review_round, candidate_id=candidate_id, commands=commands,
+                            previous_findings=previous_findings, requirements_changed=requirements_changed,
                         )
-                        status.review = SubagentReview("changes_requested", feedback, review_round, candidate_id)
+                        if verdict.verdict == "inconclusive":
+                            raise ReviewUnavailableError(verdict.summary)
+                        status.review_findings = pending
+                        reviewed_followups.update(followups)
+                        if verdict.verdict == "pass":
+                            return outcome
+                        feedback = review_feedback(pending)
+                        status.review = replace(status.review, summary=feedback)
                 if attempt == MAX_REVISIONS:
                     raise ReviewUnavailableError(f"Automatic review reached its revision limit. {feedback}")
                 status.phase = "revising"
@@ -1643,7 +1659,11 @@ class SubagentManager:
                 status.usage = total_usage
         except ReviewUnavailableError as exc:
             summary = str(exc)[:self.max_tool_result_chars]
-            status.review = SubagentReview("inconclusive", summary, review_round, candidate_id)
+            latest = status.review
+            if latest and latest.round == review_round and latest.candidate == candidate_id:
+                status.review = replace(latest, verdict="inconclusive", summary=summary)
+            else:
+                status.review = SubagentReview("inconclusive", summary, review_round, candidate_id)
             return _SubagentOutcome("incomplete", outcome.result if outcome else summary, "review_incomplete", summary)
         raise AssertionError("Review loop must settle the native task")
 
@@ -1659,7 +1679,7 @@ class SubagentManager:
         definitions = tools.get_definitions()
         result = await self.runner.run(AgentRunSpec(
             initial_messages=[
-                {"role": "system", "content": REVIEW_INSTRUCTIONS},
+                {"role": "system", "content": review_system_prompt(record.status.review_rules or "")},
                 {"role": "user", "content": evidence},
             ],
             tools=tools, runtime=runtime, max_iterations=6,

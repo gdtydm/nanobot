@@ -1850,6 +1850,29 @@
       "running": "{{count}} 項進行中",
       "finished": "{{count}} 項已結束",
       "completed": "{{count}} 項已完成",
+      "review": {
+        "previousFindings": "上一輪問題",
+        "recheck": {
+          "resolved": "已解決",
+          "open": "仍存在",
+          "unverified": "尚未驗證",
+          "superseded": "已因需求變更失效"
+        },
+        "title": "審查依據",
+        "round": "第 {{round}} 輪",
+        "command": "命令 #{{id}} 正常結束",
+        "verdict": {
+          "pass": "通過",
+          "changes_requested": "需要修正",
+          "inconclusive": "無法確認",
+          "skipped": "已略過"
+        },
+        "source": {
+          "static": "靜態檢查",
+          "command": "本輪候選版本的命令證據",
+          "unverified": "尚未驗證"
+        }
+      },
       "needsReview": "{{count}} 項需檢查"
     },
     "compaction": {

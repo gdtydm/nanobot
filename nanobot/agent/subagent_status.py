@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from dataclasses import asdict, dataclass, field
+from typing import Annotated, Any, Literal
+
+from pydantic import Field, StringConstraints
 
 from nanobot.providers.base import LLMUsage
 
@@ -11,10 +13,39 @@ SubagentState = Literal[
 ]
 SubagentBackend = Literal["native", "codex"]
 SubagentKind = Literal["general", "code_change"]
+ReviewDetail = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+ReviewIndex = Annotated[int, Field(strict=True, ge=1)]
+ReviewRecheckStatus = Literal["resolved", "open", "unverified", "superseded"]
 
 
 class SubagentSessionError(ValueError):
     """A private task session could not be read safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewFinding:
+    requirement: ReviewDetail
+    path: ReviewDetail
+    trigger: ReviewDetail
+    change: ReviewDetail
+    line: ReviewIndex | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewRecheck:
+    finding: ReviewFinding
+    status: ReviewRecheckStatus
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewVerification:
+    requirement: str
+    detail: str
+    source: Literal["static", "command", "unverified"]
+    path: str | None = None
+    line: int | None = None
+    command_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +54,8 @@ class SubagentReview:
     summary: str
     round: int = 0
     candidate: str | None = None
+    verification: tuple[ReviewVerification, ...] = ()
+    rechecks: tuple[ReviewRecheck, ...] = ()
 
 
 @dataclass(slots=True)
@@ -72,6 +105,8 @@ class SubagentStatus:
     backend: SubagentBackend = "native"
     kind: SubagentKind = "general"
     review_base: str | None = None
+    review_rules: str | None = None
+    review_findings: tuple[ReviewFinding, ...] = ()
     review: SubagentReview | None = None
     progress: str | None = None
     progress_at: float | None = None
@@ -140,8 +175,12 @@ class SubagentStatus:
             "base_ref": self.base_ref,
             "backend": self.backend,
             "kind": self.kind,
-            "review": ({"verdict": self.review.verdict, "summary": self.review.summary,
-                        "round": self.review.round, "candidate": self.review.candidate} if self.review else None),
+            "review": ({
+                "verdict": self.review.verdict, "summary": self.review.summary,
+                "round": self.review.round, "candidate": self.review.candidate,
+                "verification": [asdict(item) for item in self.review.verification],
+                "rechecks": [asdict(item) for item in self.review.rechecks],
+            } if self.review else None),
             "reference": self.reference,
             "progress": self.progress,
             "progress_at": self.progress_at,

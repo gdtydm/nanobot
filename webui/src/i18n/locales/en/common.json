@@ -2032,6 +2032,29 @@
       "running": "Running: {{count}}",
       "finished": "Finished: {{count}}",
       "completed": "Completed: {{count}}",
+      "review": {
+        "previousFindings": "Previous findings",
+        "recheck": {
+          "resolved": "Resolved",
+          "open": "Still open",
+          "unverified": "Unverified",
+          "superseded": "Superseded"
+        },
+        "title": "Review evidence",
+        "round": "Round {{round}}",
+        "command": "Command #{{id}} exited successfully",
+        "verdict": {
+          "pass": "Passed",
+          "changes_requested": "Changes requested",
+          "inconclusive": "Inconclusive",
+          "skipped": "Skipped"
+        },
+        "source": {
+          "static": "Static inspection",
+          "command": "Command evidence on this candidate",
+          "unverified": "Unverified"
+        }
+      },
       "needsReview": "Review needed: {{count}}"
     },
     "compaction": {

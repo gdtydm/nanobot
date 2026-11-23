@@ -1850,6 +1850,29 @@
       "running": "En cours : {{count}}",
       "finished": "Terminées : {{count}}",
       "completed": "Réussies : {{count}}",
+      "review": {
+        "previousFindings": "Constats précédents",
+        "recheck": {
+          "resolved": "Résolu",
+          "open": "Toujours ouvert",
+          "unverified": "Non vérifié",
+          "superseded": "Remplacé"
+        },
+        "title": "Éléments de preuve",
+        "round": "Tour {{round}}",
+        "command": "La commande nº {{id}} a réussi",
+        "verdict": {
+          "pass": "Approuvé",
+          "changes_requested": "Modifications demandées",
+          "inconclusive": "Non concluant",
+          "skipped": "Ignoré"
+        },
+        "source": {
+          "static": "Inspection statique",
+          "command": "Preuve d’exécution sur cette version",
+          "unverified": "Non vérifié"
+        }
+      },
       "needsReview": "À vérifier : {{count}}"
     },
     "compaction": {

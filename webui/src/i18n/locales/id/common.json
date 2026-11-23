@@ -1850,6 +1850,29 @@
       "running": "Berjalan: {{count}}",
       "finished": "Berakhir: {{count}}",
       "completed": "Selesai: {{count}}",
+      "review": {
+        "previousFindings": "Temuan sebelumnya",
+        "recheck": {
+          "resolved": "Terselesaikan",
+          "open": "Masih terbuka",
+          "unverified": "Belum diverifikasi",
+          "superseded": "Digantikan"
+        },
+        "title": "Bukti peninjauan",
+        "round": "Putaran {{round}}",
+        "command": "Perintah #{{id}} berhasil",
+        "verdict": {
+          "pass": "Lulus",
+          "changes_requested": "Perlu perubahan",
+          "inconclusive": "Belum dapat disimpulkan",
+          "skipped": "Dilewati"
+        },
+        "source": {
+          "static": "Pemeriksaan statis",
+          "command": "Bukti eksekusi pada kandidat ini",
+          "unverified": "Belum diverifikasi"
+        }
+      },
       "needsReview": "Perlu diperiksa: {{count}}"
     },
     "compaction": {

@@ -105,6 +105,37 @@ describe("session-owned task UI", () => {
   });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.removeItem(LOCAL_PREFS_STORAGE_KEY); });
 
+  it("shows review evidence in the completed task detail", async () => {
+    vi.mocked(fetch).mockImplementation(async () => response([task({
+      state: "done", completed_at: 200,
+      review: {
+        verdict: "pass", summary: "Regression covered", round: 2, candidate: "123456789abcdef",
+        verification: [{
+          requirement: "Inspect the original input", detail: "Found the regression assertion.",
+          source: "static", path: "test_config.py", line: 8, command_id: null,
+        }, {
+          requirement: "Run the regression suite", detail: "The unit tests completed.",
+          source: "command", path: null, line: null, command_id: 3,
+        }],
+        rechecks: [{
+          finding: { requirement: "Cover whitespace", trigger: "The old assertion only used plain text." },
+          status: "resolved", detail: "The new assertion uses the spaced input.",
+        }],
+      },
+    })]));
+    const user = userEvent.setup();
+    render(layout());
+    const archive = await openArchive(user);
+    await user.click(within(archive).getByRole("button", { name: /Config check Completed/ }));
+    const detail = await screen.findByRole("dialog");
+    const disclosure = within(detail).getByText("Review evidence · Passed");
+    await user.click(disclosure);
+    expect(within(detail).getByText("Regression covered")).toBeVisible();
+    expect(within(detail).getByText("test_config.py:8")).toBeVisible();
+    expect(within(detail).getByText(/Command #3 exited successfully/)).toBeVisible();
+    expect(within(detail).getByText("Cover whitespace · Resolved")).toBeVisible();
+  });
+
   it("keeps active work in one composer entry without mixing in a large terminal archive", async () => {
     const older = Array.from({ length: 40 }, (_, index) => task({
       task_id: `older-${index}`, label: `Archived check ${index}`, created_at: index + 1,

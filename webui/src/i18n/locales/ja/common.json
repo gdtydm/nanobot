@@ -1850,6 +1850,29 @@
       "running": "実行中: {{count}}",
       "finished": "終了: {{count}}",
       "completed": "完了: {{count}}",
+      "review": {
+        "previousFindings": "前回の指摘",
+        "recheck": {
+          "resolved": "解決済み",
+          "open": "未解決",
+          "unverified": "未検証",
+          "superseded": "要件変更で対象外"
+        },
+        "title": "レビューの根拠",
+        "round": "第 {{round}} 回",
+        "command": "コマンド #{{id}} は正常終了",
+        "verdict": {
+          "pass": "合格",
+          "changes_requested": "修正を要求",
+          "inconclusive": "判定不能",
+          "skipped": "スキップ"
+        },
+        "source": {
+          "static": "静的確認",
+          "command": "この候補での実行証拠",
+          "unverified": "未検証"
+        }
+      },
       "needsReview": "要確認: {{count}}"
     },
     "compaction": {

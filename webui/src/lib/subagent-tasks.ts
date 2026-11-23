@@ -1,4 +1,4 @@
-import type { SubagentTaskSnapshot, UIMessage } from "./types";
+import type { SubagentReviewSnapshot, SubagentTaskSnapshot, UIMessage } from "./types";
 
 export interface ObservedSubagentTask extends SubagentTaskSnapshot {
   observedAtMs: number;
@@ -20,6 +20,28 @@ export function latestSubagentInputKey(messages: readonly UIMessage[]): string |
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function isSubagentReview(value: unknown): value is SubagentReviewSnapshot {
+  if (!isRecord(value)) return false;
+  const positiveIntegerOrNull = (entry: unknown) => entry === null
+    || (typeof entry === "number" && Number.isSafeInteger(entry) && entry > 0);
+  return typeof value.verdict === "string"
+    && ["pass", "changes_requested", "inconclusive", "skipped"].includes(value.verdict)
+    && typeof value.summary === "string"
+    && typeof value.round === "number" && Number.isSafeInteger(value.round) && value.round >= 0
+    && (value.candidate === null || typeof value.candidate === "string")
+    && (value.verification === undefined || (Array.isArray(value.verification) && value.verification.every(
+      (entry: unknown) => isRecord(entry) && typeof entry.requirement === "string" && typeof entry.detail === "string"
+        && typeof entry.source === "string" && ["static", "command", "unverified"].includes(entry.source)
+        && (entry.path === null || typeof entry.path === "string") && positiveIntegerOrNull(entry.line)
+        && positiveIntegerOrNull(entry.command_id),
+    )))
+    && (value.rechecks === undefined || (Array.isArray(value.rechecks) && value.rechecks.every(
+      (entry: unknown) => isRecord(entry) && isRecord(entry.finding) && typeof entry.finding.requirement === "string"
+        && typeof entry.finding.trigger === "string" && typeof entry.detail === "string"
+        && typeof entry.status === "string" && ["resolved", "open", "unverified", "superseded"].includes(entry.status),
+    )));
 }
 
 export function isSubagentTask(value: unknown): value is SubagentTaskSnapshot {

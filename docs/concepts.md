@@ -188,6 +188,8 @@ In the WebUI, use **Settings → Models → Native subagent model** to select a 
 
 Native tasks marked `kind=code_change` in a managed project worktree go through automatic code review before completion. The reviewer compares the original requirements with the actual changes and completed commands. It can return issues to the same task for up to two rounds of fixes, then review the updated change. A task that exhausts this budget or cannot be reviewed keeps its partial result and can be resumed. Set `tools.subagent.nativeReview.enabled` to `false` to disable automatic review.
 
+The reviewer uses the project rules captured before implementation. A nonempty `AGENTS.override.md` takes precedence over `AGENTS.md`. Open **Review evidence** in the WebUI task details to see static inspection, successful command evidence for the reviewed candidate, and any unverified requirements. On later rounds the reviewer checks each outstanding finding against the updated candidate.
+
 In the WebUI, open **Settings → Models → Review model** to select a saved model preset for automatic review. You can also set `tools.subagent.nativeReview.modelPreset` to the preset name in the gateway config. **Default (main agent)** uses the model selected by the originating conversation when the task started. A selection takes effect when the next review starts, and all rounds for that task use the same selection.
 
 ### Codex tasks

@@ -5,7 +5,8 @@ import { SubagentTrace } from "@/components/thread/SubagentTrace";
 import { SubagentThreadView } from "@/components/thread/SubagentThreadView";
 import { useSubagentThread } from "@/components/thread/useSubagentThread";
 import { Button } from "@/components/ui/button";
-import type { SubagentTaskSnapshot } from "@/lib/types";
+import { isSubagentReview } from "@/lib/subagent-tasks";
+import type { SubagentReviewSnapshot, SubagentTaskSnapshot } from "@/lib/types";
 
 interface SubagentThreadProps {
   token: string;
@@ -37,6 +38,7 @@ export function SubagentThread({
         {task.state === "waiting_input" && task.question && <p className="whitespace-pre-wrap">{task.question}</p>}
       </div>
     }
+    {isSubagentReview(task.review) && <SubagentReviewDetails review={task.review} />}
     {canShowTrace &&
       <div className="flex px-2 pb-3 sm:px-4">
         <Button size="sm" variant="outline" aria-expanded={showTrace} onClick={() => setTraceOpen((open) => !open)}>
@@ -49,4 +51,43 @@ export function SubagentThread({
       : <SubagentThreadView messages={messages} loading={loading} error={error} isStreaming={isStreaming}
           activeTurnId={activeTurnId} runStartedAt={task.created_at} onRetry={retry} />}
   </>;
+}
+
+function SubagentReviewDetails({ review }: { review: SubagentReviewSnapshot }) {
+  const { t } = useTranslation();
+  const { summary, verdict, round, candidate, verification = [], rechecks = [] } = review;
+  return <details className="mx-2 mb-3 rounded-md border px-3 py-2 text-sm sm:mx-4">
+    <summary className="cursor-pointer font-medium">
+      {t("thread.subagents.review.title")} · {t(`thread.subagents.review.verdict.${verdict}`)}
+    </summary>
+    <div className="mt-2 space-y-2 break-words">
+      <p className="whitespace-pre-wrap">{summary}</p>
+      {round > 0 && <p className="text-xs text-muted-foreground">
+        {t("thread.subagents.review.round", { round })}{candidate && <> · <code title={candidate}>{candidate.slice(0, 12)}</code></>}
+      </p>}
+      {verification.length > 0 && <ol className="divide-y border-t">
+        {verification.map((entry, index) => <li key={index} className="space-y-1 py-2">
+          <p className="font-medium">{entry.requirement}</p>
+          <p className="text-muted-foreground">{entry.detail}</p>
+          <p className="text-xs text-muted-foreground">
+            {t(`thread.subagents.review.source.${entry.source}`)}
+            {entry.path && <> · <code>{entry.path}{entry.line ? `:${entry.line}` : ""}</code></>}
+            {entry.command_id !== null && <> · {t("thread.subagents.review.command", { id: entry.command_id })}</>}
+          </p>
+        </li>)}
+      </ol>}
+      {rechecks.length > 0 && <section className="space-y-1 border-t pt-2">
+        <h3 className="font-medium">{t("thread.subagents.review.previousFindings")}</h3>
+        <ol className="divide-y">
+          {rechecks.map((entry, index) => <li key={index} className="space-y-1 py-2">
+            <p className="font-medium">
+              {entry.finding.requirement} · {t(`thread.subagents.review.recheck.${entry.status}`)}
+            </p>
+            <p className="text-xs text-muted-foreground">{entry.finding.trigger}</p>
+            <p className="text-muted-foreground">{entry.detail}</p>
+          </li>)}
+        </ol>
+      </section>}
+    </div>
+  </details>;
 }
