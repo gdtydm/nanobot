@@ -1374,7 +1374,7 @@ class SubagentManager:
                         async with self._worktree_lock if saved is not None else nullcontext():
                             worktree = await prepare_project_worktree(
                                 record.project_config, self.workspace, status.worktree_id,
-                                resume=saved, base_ref=status.base_ref,
+                                label=label, resume=saved, base_ref=status.base_ref,
                                 adopt_branch=status.adopt_branch if status.adopt_branch != status.branch else None,
                             )
                         record.raise_if_stopping()

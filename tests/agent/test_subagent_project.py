@@ -212,23 +212,27 @@ async def test_project_tasks_from_two_channels_use_distinct_worktrees_and_resume
             reset_workspace_scope(token)
 
     try:
-        first = await start("LOC-1", worktree=True)
-        second = await start("LOC-2", owner=OTHER_OWNER)
+        first = await start("RETRO1123-FORMAL", worktree=True)
+        second = await start("RETRO1123-FORMAL", owner=OTHER_OWNER)
         first_id, = re.findall(r"id: ([a-f0-9-]+)", first)
         second_id, = re.findall(r"id: ([a-f0-9-]+)", second)
         paths = {await asyncio.wait_for(ready.get(), 15), await asyncio.wait_for(ready.get(), 15)}
         assert len(paths) == 2
         for task_id, owner in ((first_id, OWNER), (second_id, OTHER_OWNER)):
+            status = manager.check(task_id, owner)
+            path = workspace.resolve() / "location-tasks" / f"native-{task_id}" / "worktree"
+            assert path in paths and status.worktree == str(path)
+            assert status.branch == _git(path, "branch", "--show-current") == f"codex/retro1123-formal-{task_id[:8]}"
             _, child = manager.read_session(task_id, owner)
             entries = await sessions.state.project_history(child.key, lambda history: list(history.model_request_inputs()))
             (_, request), = entries
             assert request.content["sources"] == [
-                str(Path(manager.check(task_id, owner).worktree) / "AGENTS.override.md"),
+                str(path / "AGENTS.override.md"),
                 str(Path(__file__).resolve().parents[2] / "nanobot/templates/agent/subagent_system.md"),
             ]
         assert all((path / "worker.txt").read_text() == "edited" for path in paths)
         assert not (repo / "worker.txt").exists()
-        assert "requires a finished task" in await start("LOC-1", resume_task_id=first_id)
+        assert "requires a finished task" in await start("Continue formal rollout", resume_task_id=first_id)
         release.set()
         completed = {}
         for _ in range(2):
@@ -239,14 +243,17 @@ async def test_project_tasks_from_two_channels_use_distinct_worktrees_and_resume
         assert completed == {first_id: OWNER, second_id: OTHER_OWNER}
         saved = manager.check(first_id, OWNER)
         assert saved.state == "done" and saved.worktree
-        assert "task unavailable" in await start("LOC-1", owner=OTHER_OWNER, resume_task_id=first_id)
+        assert "task unavailable" in await start(
+            "Continue formal rollout", owner=OTHER_OWNER, resume_task_id=first_id,
+        )
 
-        resumed = await start("LOC-1", resume_task_id=first_id)
+        resumed = await start("Continue formal rollout", resume_task_id=first_id)
         resumed_id, = re.findall(r"id: ([a-f0-9-]+)", resumed)
         assert resumed_id != first_id
         assert await asyncio.wait_for(ready.get(), 15) == Path(saved.worktree)
         event = await asyncio.wait_for(manager.bus.consume_inbound(), 10)
         assert event.metadata["subagent_task_id"] == resumed_id
+        assert manager.check(resumed_id, OWNER).branch == saved.branch
     finally:
         release.set()
         await manager.close()
@@ -298,10 +305,11 @@ async def test_reclaim_and_resume_preserve_branch_and_local_artifacts(retention_
     statuses = {}
     for name in ("clean", "dirty", "artifact", "active", "changed-setup", "assume-unchanged"):
         worktree_id = str(uuid4())
-        tree = await prepare_project_worktree(config, workspace, worktree_id)
+        tree = await prepare_project_worktree(config, workspace, worktree_id, label="历史到店 / FORMAL")
         statuses[name] = _completed(worktree_id, tree.path, tree.branch, now - 8 * 24 * 60 * 60)
 
     clean = statuses["clean"]
+    assert clean.branch == f"codex/历史到店-formal-{clean.worktree_id[:8]}"
     clean_path = Path(clean.worktree)
     (clean_path / "tracked.txt").write_text("committed task result")
     commit = _commit(clean_path, "task result")
@@ -331,7 +339,8 @@ async def test_reclaim_and_resume_preserve_branch_and_local_artifacts(retention_
     assert Path(active.worktree).is_dir()
 
     resumed = await prepare_project_worktree(
-        config, workspace, clean.worktree_id, resume=ProjectWorktree(clean_path, clean.branch),
+        config, workspace, clean.worktree_id, label="Continue project task",
+        resume=ProjectWorktree(clean_path, clean.branch),
     )
     assert resumed.path == clean_path
     assert resumed.branch == clean.branch

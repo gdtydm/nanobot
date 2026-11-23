@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 import shutil
 import stat
 import tempfile
@@ -44,12 +45,17 @@ async def _run(command: list[str], cwd: Path) -> str:
     return os.fsdecode(stdout)
 
 
-def _checkout(agent_workspace: Path, worktree_id: str, branch: str | None = None) -> ProjectWorktree:
-    worktree_id = str(UUID(worktree_id))
+def _checkout_path(agent_workspace: Path, worktree_id: UUID) -> Path:
     path = agent_workspace.resolve() / "location-tasks" / f"native-{worktree_id}" / "worktree"
     if path.resolve() != path:
         raise RuntimeError("Project task directory must not contain symlinks")
-    return ProjectWorktree(path, branch or f"codex/location-{worktree_id}")
+    return path
+
+
+def _default_branch(label: str, worktree_id: UUID) -> str:
+    slug = re.sub(r"[\W_]+", "-", label.lower()).strip("-")
+    slug = slug[:48].rstrip("-") or "task"
+    return f"codex/{slug}-{worktree_id.hex[:8]}"
 
 
 async def _verify_checkout(repository: Path, worktree: ProjectWorktree) -> None:
@@ -152,14 +158,17 @@ async def prepare_project_worktree(
     agent_workspace: Path,
     worktree_id: str,
     *,
+    label: str,
     resume: ProjectWorktree | None = None,
     base_ref: str | None = None,
     adopt_branch: str | None = None,
 ) -> ProjectWorktree:
     """Provision or reopen the trusted checkout before exposing it to model tools."""
     repository = config.repository.expanduser().resolve(strict=True)
-    worktree = _checkout(agent_workspace, worktree_id, resume.branch if resume else None)
-    path = worktree.path
+    checkout_id = UUID(worktree_id)
+    path = _checkout_path(agent_workspace, checkout_id)
+    branch = resume.branch if resume is not None else _default_branch(label, checkout_id)
+    worktree = ProjectWorktree(path, branch)
     if resume is not None and path != resume.path:
         raise RuntimeError("Project worktree no longer matches its saved directory")
     if adopt_branch is not None:
@@ -261,7 +270,7 @@ async def reclaim_project_worktrees(
         try:
             if status.branch is None:
                 continue
-            expected = _checkout(workspace, worktree_id, status.branch)
+            expected = ProjectWorktree(_checkout_path(workspace, UUID(worktree_id)), status.branch)
             if status.worktree != str(expected.path):
                 continue
             worktree = await removable_project_worktree(config, expected)

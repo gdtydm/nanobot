@@ -262,6 +262,7 @@ async def test_codex_continues_terminal_task_on_adopted_worktree_branch(tmp_path
         assert original["state"] == "waiting_input"
         original_id = original["task_id"]
         path = Path(original["worktree"])
+        assert original["branch"] == git(path, "branch", "--show-current") == f"codex/compare-candidates-{original_id[:8]}"
         assert git(path, "rev-parse", "HEAD") == base_commit
         git(path, "switch", "-c", "review/clean")
         notes = path / "notes.txt"
