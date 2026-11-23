@@ -300,6 +300,7 @@ export function SettingsPage({
               providerSaving={modelState.providerOperation?.action === "login" ? modelState.providerSaving : null}
               onChangeCallOrder={modelActions.changeModelCallOrder}
               taskModelSaving={modelState.taskModelSaving}
+              codexModelCatalogSupported={webuiCapabilities.includes("webui.codex-models.v1")}
               onChangeReviewModel={webuiCapabilities.includes("webui.native-review-model.v1")
                 ? modelActions.changeReviewModel : undefined}
               onChangeSubagentModels={webuiCapabilities.includes("webui.subagent-models.v1")

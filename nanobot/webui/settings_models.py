@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, NotRequired, TypedDi
 
 import httpx
 
+from nanobot.agent.codex_task import CodexTaskError, CodexTurn
 from nanobot.agent.tools.subagent_config import normalize_subagent_model_preset
 from nanobot.config.loader import resolve_config_env_vars
 from nanobot.config.schema import (
@@ -2246,6 +2247,17 @@ class ModelSettingsHandler:
                     self.settings.read, operations.model_api, request.query,
                 )
                 return SettingsRouteResult.success(payload)
+
+            if action == "codex-models":
+                config = await asyncio.to_thread(self.settings.config.load)
+                try:
+                    async with asyncio.timeout(15):
+                        async with CodexTurn(config.tools.subagent.codex, config.workspace_path) as codex:
+                            models = await codex.list_models()
+                except (CodexTaskError, OSError, TimeoutError) as exc:
+                    self.logger.debug("could not load Codex models: {}", exc)
+                    return SettingsRouteResult.failure(503, "Could not load models from the gateway's Codex CLI")
+                return SettingsRouteResult.success({"models": models})
 
             if action == "provider-models":
                 try:

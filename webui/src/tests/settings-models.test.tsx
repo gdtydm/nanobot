@@ -166,7 +166,11 @@ describe("Settings models", () => {
     const settings: SettingsPayload = {
       ...payload, native_subagent_model_preset: null, codex_subagent_model: null, native_review_model_preset: "primary",
     };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(settings)));
+    vi.stubGlobal("fetch", vi.fn(async (url) => jsonResponse(
+      url === "/api/settings/codex-models"
+        ? { models: [{ id: "example-model", label: "Example Model" }] }
+        : settings,
+    )));
     requestMutationMock.mockImplementation(async (_action, args) => {
       if ("native_model_preset" in args) settings.native_subagent_model_preset = args.native_model_preset;
       if ("codex_model" in args) settings.codex_subagent_model = args.codex_model;
@@ -174,7 +178,7 @@ describe("Settings models", () => {
     });
     renderSettingsView({
       initialSection: "models",
-      webuiCapabilities: ["webui.native-review-model.v1", "webui.subagent-models.v1"],
+      webuiCapabilities: ["webui.native-review-model.v1", "webui.subagent-models.v1", "webui.codex-models.v1"],
     });
 
     const native = await screen.findByRole("combobox", { name: "Native subagent model" });
@@ -186,27 +190,23 @@ describe("Settings models", () => {
     );
     await waitFor(() => expect(native).toHaveTextContent("backup"));
 
-    const codexForm = screen.getByRole("form", { name: "Codex subagent model" });
-    const codex = within(codexForm).getByRole("textbox", { name: "Codex subagent model" });
-    const save = within(codexForm).getByRole("button", { name: "Save" });
-    fireEvent.change(codex, { target: { value: "example-model" } });
-    fireEvent.click(save);
+    const codex = screen.getByRole("combobox", { name: "Codex subagent model" });
+    expect(codex).toHaveTextContent("Default (Codex CLI)");
+    await openPopover(codex);
+    fireEvent.click(await screen.findByRole("option", { name: "Example Model" }));
     expect(requestMutationMock).toHaveBeenLastCalledWith(
       "settings.subagent_models.update", { codex_model: "example-model" }, 20_000,
     );
-    await waitFor(() => expect(save).toBeDisabled());
-    await waitFor(() => expect(codex).toBeEnabled());
+    await waitFor(() => expect(codex).toHaveTextContent("Example Model"));
     expect(native).toHaveTextContent("backup");
     expect(screen.getByRole("combobox", { name: "Review model" })).toHaveTextContent("primary");
 
-    fireEvent.change(codex, { target: { value: "" } });
-    fireEvent.click(save);
+    await openPopover(codex);
+    fireEvent.click(await screen.findByRole("option", { name: "Default (Codex CLI)" }));
     expect(requestMutationMock).toHaveBeenLastCalledWith(
       "settings.subagent_models.update", { codex_model: null }, 20_000,
     );
-    await waitFor(() => expect(codex).toBeEnabled());
-    expect(codex).toHaveValue("");
-    expect(codex).toHaveAttribute("placeholder", "Default (Codex CLI)");
+    await waitFor(() => expect(codex).toHaveTextContent("Default (Codex CLI)"));
 
     await openPopover(native);
     fireEvent.click(await screen.findByRole("option", { name: "Default (main agent)" }));
@@ -214,6 +214,25 @@ describe("Settings models", () => {
       "settings.subagent_models.update", { native_model_preset: null }, 20_000,
     );
     await waitFor(() => expect(native).toHaveTextContent("Default (main agent)"));
+  });
+
+  it("preserves the selected Codex model on a host without model discovery", async () => {
+    const settings = { ...settingsPayload(), codex_subagent_model: "configured-model" };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(settings));
+    vi.stubGlobal("fetch", fetchMock);
+    requestMutationMock.mockResolvedValue({ ...settings, codex_subagent_model: null });
+    renderSettingsView({ initialSection: "models", webuiCapabilities: ["webui.subagent-models.v1"] });
+
+    const codex = await screen.findByRole("combobox", { name: "Codex subagent model" });
+    expect(codex).toHaveTextContent("configured-model");
+    await openPopover(codex);
+    expect(screen.getByRole("option", { name: "Codex model list unavailable." })).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/settings/codex-models", expect.anything());
+    fireEvent.click(screen.getByRole("option", { name: "Default (Codex CLI)" }));
+    expect(requestMutationMock).toHaveBeenLastCalledWith(
+      "settings.subagent_models.update", { codex_model: null }, 20_000,
+    );
+    await waitFor(() => expect(codex).toHaveTextContent("Default (Codex CLI)"));
   });
 
   it("saves request overrides in a preset and restores inheritance when cleared", async () => {

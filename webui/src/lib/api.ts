@@ -1366,6 +1366,12 @@ export async function fetchAutomaticModelAPI(
   return { provider: result.provider, api };
 }
 
+export type CodexModelOption = { id: string; label: string };
+
+export async function fetchCodexModels(token: string, signal: AbortSignal): Promise<{ models: CodexModelOption[] }> {
+  return request("/api/settings/codex-models", token, { signal, cache: "no-store" }, API_READ_TIMEOUT_MS);
+}
+
 export async function fetchProviderModels(
   token: string,
   provider: string,

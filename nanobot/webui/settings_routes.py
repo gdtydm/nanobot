@@ -113,6 +113,7 @@ _MODEL_ROUTES = {
     "/api/settings/model-call-order/update": "call-order-update",
     "/api/settings/native-review-model/update": "native-review-model-update",
     "/api/settings/subagent-models/update": "subagent-models-update",
+    "/api/settings/codex-models": "codex-models",
     "/api/settings/provider/update": "provider-update",
     "/api/settings/provider/create": "provider-create",
     "/api/settings/provider-models": "provider-models",
@@ -393,6 +394,8 @@ class WebUISettingsRouter:
         if action.startswith("update-") or action == "version-check":
             # A saved review is immutable, but its local validity and permission
             # are not. Never reuse a cached success after an installation changes.
+            response.headers["Cache-Control"] = "no-store"
+        if action == "codex-models":
             response.headers["Cache-Control"] = "no-store"
         return response
 

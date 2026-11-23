@@ -8,7 +8,7 @@ import os
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from nanobot.agent.tools.subagent_config import CodexTaskConfig
 from nanobot.execution.processes import ProcessTree, spawn_process_tree
@@ -29,6 +29,11 @@ _OUTPUT_SCHEMA = {
 
 class CodexTaskError(RuntimeError):
     pass
+
+
+class CodexModel(TypedDict):
+    id: str
+    label: str
 
 
 class CodexTurn:
@@ -163,6 +168,29 @@ class CodexTurn:
             if self._events.full():
                 self._events.get_nowait()
             self._events.put_nowait(None)
+
+    async def list_models(self) -> list[CodexModel]:
+        account = await self._rpc("account/read", {"refreshToken": False})
+        if account.get("requiresOpenaiAuth") is True and account.get("account") is None:
+            raise CodexTaskError("Sign in to Codex on the gateway to list models")
+
+        models: dict[str, CodexModel] = {}
+        params: dict[str, Any] = {"includeHidden": False}
+        while True:
+            page = await self._rpc("model/list", params)
+            if not isinstance(data := page.get("data"), list):
+                raise CodexTaskError("Codex returned an invalid model list")
+            for entry in data:
+                if not isinstance(entry, dict) or entry.get("hidden"):
+                    continue
+                model = entry.get("model")
+                if isinstance(model, str) and model:
+                    label = entry.get("displayName")
+                    models[model] = {"id": model, "label": label if isinstance(label, str) and label else model}
+            cursor = page.get("nextCursor")
+            if not isinstance(cursor, str) or not cursor:
+                return list(models.values())
+            params["cursor"] = cursor
 
     async def open_thread(self, thread_id: str | None) -> str:
         params: dict[str, Any] = {

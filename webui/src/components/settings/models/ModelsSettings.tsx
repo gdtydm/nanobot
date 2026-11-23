@@ -48,7 +48,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { SubagentModelUpdate } from "@/lib/api";
+import { fetchCodexModels, type CodexModelOption, type SubagentModelUpdate } from "@/lib/api";
 import type { ModelAPIConfig, SettingsPayload } from "@/lib/types";
 import { ProviderParameterFields, type RequestParameterDraft } from "@/components/settings/models/ProviderParameterFields";
 import { providerJsonValue } from "@/components/settings/models/providerForm";
@@ -228,35 +228,52 @@ function TaskModelPresetRow({
 }
 
 function CodexSubagentModelRow({
-  value, busy, onSave,
+  value, busy, token, catalogSupported, onChange,
 }: {
   value: string | null;
   busy: boolean;
-  onSave: (model: string | null) => Promise<boolean>;
+  token: string;
+  catalogSupported: boolean;
+  onChange: (model: string | null) => void;
 }) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState<string | null>(null);
-  const model = draft ?? value ?? "";
-  const selected = model.trim() || null;
+  const [catalog, setCatalog] = useState<CodexModelOption[] | "loading" | "unavailable">("loading");
+  useEffect(() => {
+    if (!catalogSupported) return;
+    const controller = new AbortController();
+    fetchCodexModels(token, controller.signal).then(
+      ({ models }) => { if (!controller.signal.aborted) setCatalog(models); },
+      () => { if (!controller.signal.aborted) setCatalog("unavailable"); },
+    );
+    return () => controller.abort();
+  }, [catalogSupported, token]);
+
   const label = t("settings.models.codexSubagentModel");
+  const models = catalogSupported && Array.isArray(catalog) ? catalog : [];
   return (
     <SettingsRow title={label} description={t("settings.models.codexSubagentModelHelp")}>
-      <form aria-label={label} className="flex min-w-0 flex-wrap items-center gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!busy && selected !== value) {
-            void onSave(selected).then((saved) => { if (saved) setDraft(null); });
-          }
-        }}>
-        <Input aria-label={label} value={model} disabled={busy}
-          className="w-full min-w-0 rounded-full sm:w-60"
-          placeholder={t("settings.models.codexSubagentModelDefault")}
-          onChange={(event) => setDraft(event.target.value)} />
-        <Button type="submit" variant="outline" size="sm" className="rounded-full"
-          disabled={busy || selected === value}>
-          {t("settings.actions.savePreset")}
-        </Button>
-      </form>
+      <Select value={value ? `model:${value}` : "default"} disabled={busy}
+        onValueChange={(selected) => onChange(selected === "default" ? null : selected.slice("model:".length))}>
+        <SelectTrigger aria-label={label} className="w-full min-w-0 rounded-full sm:w-60">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="default">{t("settings.models.codexSubagentModelDefault")}</SelectItem>
+          {value && !models.some((model) => model.id === value) ? (
+            <SelectItem value={`model:${value}`} disabled>{value}</SelectItem>
+          ) : null}
+          {models.map((model) => (
+            <SelectItem key={model.id} value={`model:${model.id}`}>{model.label}</SelectItem>
+          ))}
+          {!catalogSupported || catalog === "unavailable" ? (
+            <SelectItem value="unavailable" disabled>{t("settings.models.codexModelsUnavailable")}</SelectItem>
+          ) : catalog === "loading" ? (
+            <SelectItem value="loading" disabled>{t("settings.models.loadingModels")}</SelectItem>
+          ) : models.length === 0 ? (
+            <SelectItem value="empty" disabled>{t("settings.models.noModelResults")}</SelectItem>
+          ) : null}
+        </SelectContent>
+      </Select>
     </SettingsRow>
   );
 }
@@ -281,6 +298,7 @@ export function ModelsSettings({
   providerSaving,
   onChangeCallOrder,
   taskModelSaving,
+  codexModelCatalogSupported,
   onChangeReviewModel,
   onChangeSubagentModels,
   onProviderOAuthLogin,
@@ -315,6 +333,7 @@ export function ModelsSettings({
   providerSaving: string | null;
   onChangeCallOrder: (order: string[]) => void;
   taskModelSaving: boolean;
+  codexModelCatalogSupported: boolean;
   onChangeReviewModel?: (preset: string | null) => void;
   onChangeSubagentModels?: (update: SubagentModelUpdate) => Promise<boolean>;
   onProviderOAuthLogin: (provider: string) => void;
@@ -801,8 +820,9 @@ export function ModelsSettings({
             />
           ) : null}
           {onChangeSubagentModels && settings.codex_subagent_model !== undefined ? (
-            <CodexSubagentModelRow value={settings.codex_subagent_model} busy={taskModelBusy}
-              onSave={(model) => onChangeSubagentModels({ codex_model: model })} />
+            <CodexSubagentModelRow key={token} value={settings.codex_subagent_model} busy={taskModelBusy}
+              token={token} catalogSupported={codexModelCatalogSupported}
+              onChange={(model) => { void onChangeSubagentModels({ codex_model: model }); }} />
           ) : null}
           {onChangeReviewModel && settings.native_review_model_preset !== undefined ? (
             <TaskModelPresetRow

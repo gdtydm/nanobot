@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 import threading
 import time
 import uuid
@@ -4876,6 +4877,64 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
             await webui_client.close()
         await channel.stop()
         await server_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="test App Server uses a POSIX executable script")
+async def test_codex_model_catalog_uses_gateway_cli(monkeypatch, tmp_path):
+    from websockets.http11 import Request
+
+    cli = tmp_path / "gateway-codex"
+    cli.write_text(f"#!{sys.executable}\n" + """
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request["method"]
+    if method == "initialized":
+        continue
+    if method == "initialize":
+        result = {}
+    elif method == "account/read":
+        result = {"account": {"type": "chatgpt"}, "requiresOpenaiAuth": True}
+    elif method == "model/list":
+        assert request["params"]["includeHidden"] is False
+        if request["params"].get("cursor") == "next":
+            result = {"data": [{"id": "second", "model": "second"}], "nextCursor": None}
+        else:
+            result = {"data": [
+                {"id": "catalog-id", "model": "first", "displayName": "First Model"},
+                {"id": "hidden", "model": "hidden", "hidden": True},
+            ], "nextCursor": "next"}
+    else:
+        raise AssertionError(method)
+    print(json.dumps({"id": request["id"], "result": result}), flush=True)
+""")
+    cli.chmod(0o755)
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    config.tools.subagent.codex.executable = str(cli)
+    config_path = tmp_path / "config.json"
+    save_config(config, config_path)
+    monkeypatch.setattr("nanobot.config.loader._current_config_path", config_path)
+    gateway = _basic_handler(MessageBus())
+    token = gateway.tokens.issue_api_token(300)
+    connection = SimpleNamespace()
+    path = "/api/settings/codex-models"
+    try:
+        unauthorized = await gateway.http.dispatch(connection, Request(path, Headers()))
+        assert unauthorized is not None and unauthorized.status_code == 401
+        response = await gateway.http.dispatch(
+            connection, Request(path, Headers({"Authorization": f"Bearer {token}"})),
+        )
+        assert response is not None and response.status_code == 200
+        assert response.headers["Cache-Control"] == "no-store"
+        assert json.loads(response.body) == {"models": [
+            {"id": "first", "label": "First Model"}, {"id": "second", "label": "second"},
+        ]}
+    finally:
+        await gateway.http.settings_routes.close()
 
 
 @pytest.mark.asyncio
