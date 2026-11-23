@@ -58,7 +58,7 @@ if TYPE_CHECKING:
         min_length=1,
     ),
     temperature=NumberSchema(
-        description="Sampling temperature for native create. Defaults to the parent runtime's temperature.",
+        description="Sampling temperature for native create. Defaults to the selected task model's temperature.",
         minimum=0.0,
         maximum=2.0,
     ),

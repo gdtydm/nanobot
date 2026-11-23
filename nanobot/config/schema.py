@@ -547,6 +547,12 @@ class Config(BaseSettings):
         dream_name = self.agents.defaults.dream.model_override
         if dream_name and dream_name != "default" and dream_name not in self.model_presets:
             raise ValueError(f"Dream model preset {dream_name!r} not found in model_presets")
+        native_name = self.tools.subagent.native_model_preset
+        if native_name is not None and native_name not in self.model_presets:
+            raise ValueError(f"Native subagent model preset {native_name!r} not found in model_presets")
+        review_name = self.tools.subagent.native_review.model_preset
+        if review_name is not None and review_name not in self.model_presets:
+            raise ValueError(f"Native review model preset {review_name!r} not found in model_presets")
         for fallback in self.agents.defaults.fallback_models:
             if isinstance(fallback, str) and fallback not in self.model_presets:
                 raise ValueError(f"fallback_models entry {fallback!r} not found in model_presets")

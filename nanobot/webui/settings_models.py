@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, NotRequired, TypedDi
 
 import httpx
 
+from nanobot.agent.tools.subagent_config import normalize_subagent_model_preset
 from nanobot.config.loader import resolve_config_env_vars
 from nanobot.config.schema import (
     Config,
@@ -82,6 +83,8 @@ class ModelSettingsOperations:
     delete_model: SettingsOperation
     migrate_models: SettingsOperation
     update_call_order: SettingsOperation
+    update_native_review_model: SettingsOperation
+    update_subagent_models: SettingsOperation
     update_provider: SettingsOperation
     create_provider: SettingsOperation
     provider_models: SettingsOperation
@@ -100,6 +103,9 @@ class ModelSettingsPayload(TypedDict):
     model_presets: list[dict[str, Any]]
     model_call_order: list[str]
     model_call_order_editable: bool
+    native_review_model_preset: str | None
+    native_subagent_model_preset: str | None
+    codex_subagent_model: str | None
     model_configuration_migratable: bool
     model_api_resolution_supported: bool
     provider_api_configuration_supported: bool
@@ -222,14 +228,19 @@ def oauth_provider_status(spec: Any) -> dict[str, Any]:
         }
 
     if spec.name == "antigravity":
-        from nanobot.providers.antigravity_oauth import get_antigravity_login_status
+        from nanobot.providers.antigravity_oauth import (
+            AntigravityOAuthClient,
+            get_antigravity_login_status,
+        )
 
         token = get_antigravity_login_status()
+        client_configured = bool((token and token.oauth_client) or AntigravityOAuthClient.from_environment())
         return {
-            "configured": bool(token and (token.refresh or token.expires > time.time() * 1000)),
+            "configured": bool(token and (token.expires > time.time() * 1000 or (token.refresh and client_configured))),
             "account": token.account_id if token else None,
             "expires_at": token.expires if token else None,
             "login_supported": True,
+            "client_setup_required": not client_configured,
         }
 
     if spec.name == "openai_codex":
@@ -432,6 +443,8 @@ def _provider_settings_row(
             row["configured"] = bool(row["configured"] and has_api_key)
             row["oauth_login_supported"] = bool(row["oauth_login_supported"] and has_api_key)
             row["oauth_logout_supported"] = False
+        if "client_setup_required" in oauth_status:
+            row["oauth_client_setup_required"] = oauth_status["client_setup_required"]
     return row
 
 
@@ -918,6 +931,11 @@ def _rename_model_configuration(config: Config, old_name: str, new_name: str) ->
     ]
     if defaults.dream.model_override == old_name:
         defaults.dream.model_override = new_name
+    subagent = config.tools.subagent
+    if subagent.native_model_preset == old_name:
+        subagent.native_model_preset = new_name
+    if subagent.native_review.model_preset == old_name:
+        subagent.native_review.model_preset = new_name
     return True
 
 
@@ -1215,6 +1233,9 @@ def model_settings_payload(
         "model_request_overrides_supported": True,
         "model_call_order": model_call_order,
         "model_call_order_editable": model_call_order_editable,
+        "native_review_model_preset": config.tools.subagent.native_review.model_preset,
+        "native_subagent_model_preset": config.tools.subagent.native_model_preset,
+        "codex_subagent_model": config.tools.subagent.codex.model,
         "model_configuration_migratable": _legacy_model_configuration_migratable(
             config,
             oauth_status,
@@ -1504,6 +1525,39 @@ def update_model_configuration(
     return changed
 
 
+def update_native_review_model(config: Config, query: QueryParams) -> bool:
+    raw_name = query_first(query, "model_preset")
+    if raw_name is None:
+        raise WebUISettingsError("review model preset is required")
+    selected = normalize_subagent_model_preset(raw_name)
+    if selected is not None and selected not in config.model_presets:
+        raise WebUISettingsError("unknown review model preset")
+    review = config.tools.subagent.native_review
+    if review.model_preset == selected:
+        return False
+    review.model_preset = selected
+    return True
+
+
+def update_subagent_models(config: Config, query: QueryParams) -> bool:
+    native = query_first(query, "native_model_preset")
+    codex = query_first(query, "codex_model")
+    if native is None and codex is None:
+        raise WebUISettingsError("a subagent model setting is required")
+    subagent = config.tools.subagent
+    native_preset = subagent.native_model_preset
+    if native is not None:
+        native_preset = normalize_subagent_model_preset(native)
+        if native_preset is not None and native_preset not in config.model_presets:
+            raise WebUISettingsError("unknown native subagent model preset")
+    codex_model = subagent.codex.model if codex is None else codex.strip() or None
+    if (native_preset, codex_model) == (subagent.native_model_preset, subagent.codex.model):
+        return False
+    subagent.native_model_preset = native_preset
+    subagent.codex.model = codex_model
+    return True
+
+
 def update_model_call_order(
     config: Config,
     query: QueryParams,
@@ -1645,6 +1699,11 @@ def delete_model_configuration(config: Config, query: QueryParams) -> None:
             status=409,
         )
     defaults.fallback_models = [fallback for fallback in defaults.fallback_models if fallback != name]
+    subagent = config.tools.subagent
+    if subagent.native_model_preset == name:
+        subagent.native_model_preset = None
+    if subagent.native_review.model_preset == name:
+        subagent.native_review.model_preset = None
     del config.model_presets[name]
 
 
@@ -1775,6 +1834,7 @@ def login_oauth_provider(
     *,
     oauth_flows: WebUIOAuthFlowRegistry,
     config_path: Path | None,
+    oauth_client: object = None,
 ) -> dict[str, Any]:
     provider_name = (query_first(query, "provider") or "").strip()
     if not provider_name:
@@ -1880,15 +1940,28 @@ def login_oauth_provider(
         }
 
     if spec.name == "antigravity":
-        from nanobot.providers.antigravity_oauth import AntigravityOAuthError, AntigravityOAuthFlow
+        from nanobot.providers.antigravity_oauth import (
+            AntigravityOAuthClient,
+            AntigravityOAuthError,
+            AntigravityOAuthFlow,
+        )
 
+        client = None
+        if oauth_client is not None:
+            if not isinstance(oauth_client, dict):
+                raise WebUISettingsError("OAuth client settings must be an object.")
+            fields = cast(dict[str, object], oauth_client)
+            client_id, client_secret = fields.get("client_id"), fields.get("client_secret", "")
+            if not isinstance(client_id, str) or not client_id.strip() or not isinstance(client_secret, str):
+                raise WebUISettingsError("Enter an OAuth client ID and, if required, a client secret.")
+            client = AntigravityOAuthClient(client_id.strip(), client_secret.strip())
         resolved_config = resolve_config_env_vars(config, config_path=config_path)
         proxy = resolved_config.network.resolve_proxy(resolved_config.providers.antigravity.use_proxy)
         remote_value = query_first(query, "remote_browser")
         remote = parse_bool(remote_value, "remote_browser") if remote_value is not None else False
         try:
             antigravity_flow = AntigravityOAuthFlow(
-                proxy=proxy, timeout_s=_WEBUI_OAUTH_TIMEOUT_S, remote_browser=remote,
+                proxy=proxy, timeout_s=_WEBUI_OAUTH_TIMEOUT_S, remote_browser=remote, oauth_client=client,
             )
         except AntigravityOAuthError as exc:
             raise WebUISettingsError(str(exc), status=400) from exc
@@ -2136,6 +2209,8 @@ class ModelSettingsHandler:
                 "model-delete": operations.delete_model,
                 "models-migrate": operations.migrate_models,
                 "call-order-update": operations.update_call_order,
+                "native-review-model-update": operations.update_native_review_model,
+                "subagent-models-update": operations.update_subagent_models,
                 "provider-create": operations.create_provider,
             }.get(action)
             if mutation is not None:
@@ -2190,11 +2265,13 @@ class ModelSettingsHandler:
                 return SettingsRouteResult.success(payload)
 
             if action == "oauth-login":
+                oauth_client = (request.payload or {}).get("oauth_client")
                 payload = await asyncio.to_thread(
                     self.settings.read,
                     operations.oauth_login,
                     request.query,
                     oauth_flows=self.settings.oauth_flows,
+                    **({"oauth_client": oauth_client} if oauth_client is not None else {}),
                 )
             elif action == "oauth-complete":
                 raw_response = (request.payload or {}).get("authorization_response")

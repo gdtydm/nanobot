@@ -61,19 +61,24 @@ class AntigravityOAuthInputError(AntigravityOAuthError):
 
 
 @dataclass(frozen=True, slots=True)
-class _OAuthClient:
+class AntigravityOAuthClient:
     id: str
     secret: str = field(repr=False)
 
     @classmethod
-    def from_environment(cls) -> _OAuthClient:
+    def from_environment(cls) -> AntigravityOAuthClient | None:
         client_id = os.environ.get("NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_ID", "").strip()
-        if not client_id:
-            raise AntigravityOAuthError(
-                "Set NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_ID in the nanobot process environment "
-                "before signing in to Antigravity or refreshing its token."
-            )
-        return cls(client_id, os.environ.get("NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_SECRET", "").strip())
+        return cls(client_id, os.environ.get("NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_SECRET", "").strip()) if client_id else None
+
+
+def _require_oauth_client(saved: AntigravityOAuthClient | None) -> AntigravityOAuthClient:
+    client = saved or AntigravityOAuthClient.from_environment()
+    if client is None:
+        raise AntigravityOAuthError(
+            "Configure the OAuth client in WebUI, or set NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_ID "
+            "in the nanobot process environment."
+        )
+    return client
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,7 @@ class AntigravityToken:
     expires: int
     account_id: str
     project_id: str
+    oauth_client: AntigravityOAuthClient | None = field(default=None, repr=False)
 
 
 def get_antigravity_storage_path() -> Path:
@@ -111,12 +117,20 @@ def get_antigravity_login_status(path: Path | None = None) -> AntigravityToken |
     if not isinstance(expires, int) or isinstance(expires, bool):
         return None
     refresh = record.get("refresh")
+    oauth_client = None
+    raw_client = record.get("oauth_client")
+    if isinstance(raw_client, dict):
+        client_data = cast(dict[str, object], raw_client)
+        client_id, client_secret = client_data.get("id"), client_data.get("secret")
+        if isinstance(client_id, str) and client_id and isinstance(client_secret, str):
+            oauth_client = AntigravityOAuthClient(client_id, client_secret)
     return AntigravityToken(
         access=cast(str, record["access"]),
         refresh=refresh if isinstance(refresh, str) and refresh else None,
         expires=expires,
         account_id=cast(str, record["account_id"]),
         project_id=cast(str, record["project_id"]),
+        oauth_client=oauth_client,
     )
 
 
@@ -124,7 +138,10 @@ def _write_token(path: Path, token: AntigravityToken) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with suppress(OSError):
         path.parent.chmod(0o700)
-    _write_text_atomic(path, json.dumps(asdict(token), ensure_ascii=False))
+    record = asdict(token)
+    if token.oauth_client is None:
+        record.pop("oauth_client")
+    _write_text_atomic(path, json.dumps(record, ensure_ascii=False))
     with suppress(OSError):
         path.chmod(0o600)
 
@@ -165,7 +182,7 @@ def response_object(response: httpx.Response, action: str) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
-def _token_response(client: httpx.Client, oauth_client: _OAuthClient, data: dict[str, str]) -> dict[str, Any]:
+def _token_response(client: httpx.Client, oauth_client: AntigravityOAuthClient, data: dict[str, str]) -> dict[str, Any]:
     form = {**data, "client_id": oauth_client.id}
     if oauth_client.secret:
         form["client_secret"] = oauth_client.secret
@@ -198,7 +215,7 @@ def get_antigravity_token(
             return token
         if not token.refresh:
             raise AntigravityReauthRequiredError("Antigravity sign-in expired. Please sign in again.")
-        oauth_client = _OAuthClient.from_environment()
+        oauth_client = _require_oauth_client(token.oauth_client)
         with http_client(proxy) as client:
             payload = _token_response(client, oauth_client, {"grant_type": "refresh_token", "refresh_token": token.refresh})
         refreshed = replace(
@@ -266,9 +283,12 @@ class AntigravityOAuthFlow:
     def __init__(
         self, *, proxy: str | None = None, timeout_s: float = 600,
         callback_port: int = CALLBACK_PORT, remote_browser: bool = False,
+        oauth_client: AntigravityOAuthClient | None = None,
     ) -> None:
-        self._oauth_client = _OAuthClient.from_environment()
         self._path = get_antigravity_storage_path()
+        saved = get_antigravity_login_status(self._path)
+        self._stored_oauth_client = oauth_client or (saved.oauth_client if saved else None)
+        self._oauth_client = _require_oauth_client(self._stored_oauth_client)
         self._proxy = proxy
         self._state = secrets.token_urlsafe(32)
         self._verifier = secrets.token_urlsafe(64)
@@ -413,6 +433,7 @@ class AntigravityOAuthFlow:
                 access=payload["access_token"], refresh=payload.get("refresh_token"),
                 expires=int(time.time() * 1000 + payload["expires_in"] * 1000),
                 account_id=account, project_id=project,
+                oauth_client=self._stored_oauth_client,
             )
             with self._lock:
                 self._check_active()

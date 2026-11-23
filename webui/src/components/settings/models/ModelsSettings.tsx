@@ -46,7 +46,9 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import type { SubagentModelUpdate } from "@/lib/api";
 import type { ModelAPIConfig, SettingsPayload } from "@/lib/types";
 import { ProviderParameterFields, type RequestParameterDraft } from "@/components/settings/models/ProviderParameterFields";
 import { providerJsonValue } from "@/components/settings/models/providerForm";
@@ -196,6 +198,69 @@ export function ModelPresetDeleteDialog({
   );
 }
 
+function TaskModelPresetRow({
+  label, description, presets, value, busy, onChange,
+}: {
+  label: string;
+  description: string;
+  presets: SettingsPayload["model_presets"];
+  value: string | null;
+  busy: boolean;
+  onChange: (preset: string | null) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsRow title={label} description={description}>
+      <Select value={value ?? "default"} disabled={busy}
+        onValueChange={(name) => onChange(name === "default" ? null : name)}>
+        <SelectTrigger aria-label={label} className="w-full min-w-0 rounded-full sm:w-60">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="default">{t("settings.models.reviewModelDefault")}</SelectItem>
+          {presets.filter((preset) => !preset.is_default).map((preset) => (
+            <SelectItem key={preset.name} value={preset.name}>{preset.name}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </SettingsRow>
+  );
+}
+
+function CodexSubagentModelRow({
+  value, busy, onSave,
+}: {
+  value: string | null;
+  busy: boolean;
+  onSave: (model: string | null) => Promise<boolean>;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState<string | null>(null);
+  const model = draft ?? value ?? "";
+  const selected = model.trim() || null;
+  const label = t("settings.models.codexSubagentModel");
+  return (
+    <SettingsRow title={label} description={t("settings.models.codexSubagentModelHelp")}>
+      <form aria-label={label} className="flex min-w-0 flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!busy && selected !== value) {
+            void onSave(selected).then((saved) => { if (saved) setDraft(null); });
+          }
+        }}>
+        <Input aria-label={label} value={model} disabled={busy}
+          className="w-full min-w-0 rounded-full sm:w-60"
+          placeholder={t("settings.models.codexSubagentModelDefault")}
+          onChange={(event) => setDraft(event.target.value)} />
+        <Button type="submit" variant="outline" size="sm" className="rounded-full"
+          disabled={busy || selected === value}>
+          {t("settings.actions.savePreset")}
+        </Button>
+      </form>
+    </SettingsRow>
+  );
+}
+
 export function ModelsSettings({
   editCompletion: edits,
   token,
@@ -215,6 +280,9 @@ export function ModelsSettings({
   showBrandLogos,
   providerSaving,
   onChangeCallOrder,
+  taskModelSaving,
+  onChangeReviewModel,
+  onChangeSubagentModels,
   onProviderOAuthLogin,
   onAddProvider,
   onConfigureProvider,
@@ -246,6 +314,9 @@ export function ModelsSettings({
   showBrandLogos: boolean;
   providerSaving: string | null;
   onChangeCallOrder: (order: string[]) => void;
+  taskModelSaving: boolean;
+  onChangeReviewModel?: (preset: string | null) => void;
+  onChangeSubagentModels?: (update: SubagentModelUpdate) => Promise<boolean>;
   onProviderOAuthLogin: (provider: string) => void;
   onAddProvider: (trigger: HTMLButtonElement | null, onAdded: (provider: string) => void) => void;
   onConfigureProvider: (provider: string, trigger: HTMLButtonElement | null) => void;
@@ -503,7 +574,14 @@ export function ModelsSettings({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => selectedProvider && onProviderOAuthLogin(selectedProvider.name)}
+            onClick={(event) => {
+              if (!selectedProvider) return;
+              if (selectedProvider.oauth_client_setup_required) {
+                onConfigureProvider(selectedProvider.name, event.currentTarget);
+              } else {
+                onProviderOAuthLogin(selectedProvider.name);
+              }
+            }}
             disabled={!selectedProvider?.oauth_login_supported || selectedProviderSigningIn}
             className="rounded-full"
           >
@@ -512,7 +590,9 @@ export function ModelsSettings({
             ) : null}
             {selectedProviderSigningIn
               ? tx("settings.oauth.signingIn", "Signing in...")
-              : tx("settings.oauth.signIn", "Sign in")}
+              : selectedProvider?.oauth_client_setup_required
+                ? t("settings.oauth.configureClient")
+                : tx("settings.oauth.signIn", "Sign in")}
           </Button>
         </SettingsRow>
       ) : null}
@@ -707,9 +787,32 @@ export function ModelsSettings({
 
   const showMigration = !settings.model_call_order_editable
     && settings.model_configuration_migratable !== false;
+  const taskModelBusy = taskModelSaving || saving || orderSaving || migrationSaving;
 
   return (
     <div className="settings-stack">
+      {onChangeSubagentModels || onChangeReviewModel ? (
+        <SettingsGroup>
+          {onChangeSubagentModels && settings.native_subagent_model_preset !== undefined ? (
+            <TaskModelPresetRow
+              label={t("settings.models.nativeSubagentModel")} description={t("settings.models.nativeSubagentModelHelp")}
+              presets={settings.model_presets} busy={taskModelBusy} value={settings.native_subagent_model_preset}
+              onChange={(preset) => { void onChangeSubagentModels({ native_model_preset: preset }); }}
+            />
+          ) : null}
+          {onChangeSubagentModels && settings.codex_subagent_model !== undefined ? (
+            <CodexSubagentModelRow value={settings.codex_subagent_model} busy={taskModelBusy}
+              onSave={(model) => onChangeSubagentModels({ codex_model: model })} />
+          ) : null}
+          {onChangeReviewModel && settings.native_review_model_preset !== undefined ? (
+            <TaskModelPresetRow
+              label={t("settings.models.reviewModel")} description={t("settings.models.reviewModelHelp")}
+              presets={settings.model_presets} busy={taskModelBusy}
+              value={settings.native_review_model_preset} onChange={onChangeReviewModel}
+            />
+          ) : null}
+        </SettingsGroup>
+      ) : null}
       <section>
         <SettingsSectionTitle>{t("settings.models.presets")}</SettingsSectionTitle>
         {showMigration ? (

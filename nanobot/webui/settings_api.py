@@ -270,6 +270,28 @@ def update_model_configuration(
     )
 
 
+def update_native_review_model(
+    query: QueryParams,
+    *,
+    config_path: Path | None = None,
+) -> dict[str, Any]:
+    config = _load_settings_config(config_path)
+    if models.update_native_review_model(config, query):
+        _save_settings_config(config, config_path)
+    return settings_payload(config_path=config_path)
+
+
+def update_subagent_models(
+    query: QueryParams,
+    *,
+    config_path: Path | None = None,
+) -> dict[str, Any]:
+    config = _load_settings_config(config_path)
+    if models.update_subagent_models(config, query):
+        _save_settings_config(config, config_path)
+    return settings_payload(config_path=config_path)
+
+
 def update_model_call_order(
     query: QueryParams,
     *,
@@ -363,12 +385,14 @@ def login_oauth_provider(
     *,
     oauth_flows: WebUIOAuthFlowRegistry,
     config_path: Path | None = None,
+    oauth_client: object = None,
 ) -> dict[str, Any]:
     return models.login_oauth_provider(
         _load_settings_config(config_path),
         query,
         oauth_flows=oauth_flows,
         config_path=config_path,
+        oauth_client=oauth_client,
     )
 
 

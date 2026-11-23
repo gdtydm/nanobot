@@ -1,6 +1,7 @@
 import { isContextGraph, isContextInspection } from "@/lib/context-graph";
 import { isCompactionPhase, isCompactionReason } from "../../../packages/client-events/notifications";
 import type {
+  AntigravityOAuthClientInput,
   AutomationChatsPayload,
   AutomationChatUpdate,
   AutomationsPayload,
@@ -1562,6 +1563,22 @@ export async function updateModelCallOrder(
   return mutation<SettingsPayload>(transport, "settings.model_call_order.update", { order });
 }
 
+export async function updateNativeReviewModel(
+  transport: WebUIMutationTransport,
+  modelPreset: string | null,
+): Promise<SettingsPayload> {
+  return mutation<SettingsPayload>(transport, "settings.native_review_model.update", { model_preset: modelPreset });
+}
+
+export type SubagentModelUpdate = { native_model_preset: string | null } | { codex_model: string | null };
+
+export async function updateSubagentModels(
+  transport: WebUIMutationTransport,
+  update: SubagentModelUpdate,
+): Promise<SettingsPayload> {
+  return mutation<SettingsPayload>(transport, "settings.subagent_models.update", update);
+}
+
 export async function updateProviderSettings(
   transport: WebUIMutationTransport,
   update: ProviderSettingsUpdate,
@@ -1580,11 +1597,16 @@ export async function loginProviderOAuth(
   transport: WebUIMutationTransport,
   provider: string,
   remoteBrowserAccess: boolean = false,
+  oauthClient?: AntigravityOAuthClientInput,
 ): Promise<ProviderOAuthLoginResult> {
   return mutation<ProviderOAuthLoginResult>(
     transport,
     "settings.provider.oauth_login",
-    { provider, ...(remoteBrowserAccess ? { remote_browser: true } : {}) },
+    {
+      provider,
+      ...(remoteBrowserAccess ? { remote_browser: true } : {}),
+      ...(oauthClient ? { oauth_client: oauthClient } : {}),
+    },
   );
 }
 

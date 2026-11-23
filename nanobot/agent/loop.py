@@ -120,6 +120,7 @@ from nanobot.utils.runtime import (
 )
 
 if TYPE_CHECKING:
+    from nanobot.agent.tools.subagent_config import SubagentToolConfig
     from nanobot.config.schema import (
         ChannelsConfig,
         Config,
@@ -297,6 +298,7 @@ class AgentLoop:
         hook_factories: list[AgentTurnHookFactory] | None = None,
         disabled_skills: list[str] | None = None,
         tools_config: ToolsConfig | None = None,
+        subagent_config_loader: Callable[[], SubagentToolConfig] | None = None,
         network_config: NetworkConfig | None = None,
         provider_snapshot_loader: Callable[..., ProviderSnapshot] | None = None,
         provider_signature: tuple[object, ...] | None = None,
@@ -409,6 +411,8 @@ class AgentLoop:
             max_concurrent_subagents=max_concurrent_subagents,
             consolidator=self.consolidator,
             session_manager=self.sessions,
+            resolve_model_preset=self.runtime_resolver.resolve_preset,
+            subagent_config_loader=subagent_config_loader,
         )
         self._running = False
         self._runtime_context_providers: list[RuntimeContextProvider] = []

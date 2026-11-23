@@ -66,7 +66,7 @@ for line in sys.stdin:
         resumed_thread = method == "thread/resume"
         if resumed_thread:
             assert params["threadId"] == thread
-        result = {"thread": {"id": thread}, "model": "test-model", "reasoningEffort": "high"}
+        result = {"thread": {"id": thread}, "model": params.get("model") or "test-model", "reasoningEffort": "high"}
     elif method == "turn/start":
         assert params["threadId"] == thread and params["effort"] == "high"
         assert params["approvalPolicy"] == "on-request" and params["approvalsReviewer"] == "auto_review"
@@ -430,12 +430,14 @@ async def test_codex_command_uses_shared_worker_from_direct_cli(tmp_path, codex_
             "enabled": True, "executable": str(executable), "networkAccess": False,
         })),
     )
+    live_settings = tools_config.subagent.model_copy(deep=True)
+    live_settings.codex.model = "configured-model"
 
     async def run_once(message, *, answer=None):
         loop = AgentLoop(
             bus=MessageBus(), provider=_DelegationProvider(answer),
             workspace=repo, session_manager=SessionManager(repo, sessions_root=tmp_path / "cli-sessions"),
-            tools_config=tools_config, max_iterations=4,
+            tools_config=tools_config, max_iterations=4, subagent_config_loader=lambda: live_settings,
         )
         try:
             reply = await loop.process_direct(message)
@@ -447,11 +449,14 @@ async def test_codex_command_uses_shared_worker_from_direct_cli(tmp_path, codex_
     reply, pending = await run_once("/codex compare Beacon candidates")
     assert reply is not None and pending.reference in reply.content
     assert pending.state == "waiting_input" and "Which date window?" in reply.content
+    assert pending.model == "configured-model"
+    live_settings.codex.model = "next-model"
 
     reply, completed = await run_once("Use January", answer={
         "action": "send", "task_id": pending.reference, "question_id": pending.question_id, "message": "January",
     })
     assert completed.state == "done" and completed.codex_thread == pending.codex_thread
+    assert completed.model == "configured-model"
     assert reply is not None and "Evaluated in the original thread" in reply.content
     reply, continued = await run_once("Continue the evaluation", answer={
         "action": "create", "resume_task_id": completed.task_id,
@@ -459,7 +464,11 @@ async def test_codex_command_uses_shared_worker_from_direct_cli(tmp_path, codex_
     })
     assert reply is not None and continued.reference in reply.content
     assert continued.state == "done" and continued.codex_thread == completed.codex_thread
+    assert continued.model == "configured-model"
     assert continued.resume_task_id == completed.task_id and continued.task_id != completed.task_id
+
+    _, next_task = await run_once("/codex compare another batch")
+    assert next_task.state == "waiting_input" and next_task.model == "next-model"
 
 
 @pytest.mark.asyncio

@@ -184,11 +184,17 @@ Reclaiming a checkout preserves its local branch, commits, and task history. The
 
 See [Delegated work in the WebUI](./webui.md#delegated-work) for progress and task details. WebUI temporary chats do not support subagents. SDK calls with `ephemeral=True` wait for delegated results without saving the temporary conversation or its subagent history.
 
+In the WebUI, use **Settings → Models → Native subagent model** to select a saved preset for new native tasks, including their requested fixes. The gateway config key is `tools.subagent.nativeModelPreset`. **Default (main agent)** follows the originating conversation's model when the task starts.
+
 Native tasks marked `kind=code_change` in a managed project worktree go through automatic code review before completion. The reviewer compares the original requirements with the actual changes and completed commands. It can return issues to the same task for up to two rounds of fixes, then review the updated change. A task that exhausts this budget or cannot be reviewed keeps its partial result and can be resumed. Set `tools.subagent.nativeReview.enabled` to `false` to disable automatic review.
+
+In the WebUI, open **Settings → Models → Review model** to select a saved model preset for automatic review. You can also set `tools.subagent.nativeReview.modelPreset` to the preset name in the gateway config. **Default (main agent)** uses the model selected by the originating conversation when the task started. A selection takes effect when the next review starts, and all rounds for that task use the same selection.
 
 ### Codex tasks
 
 Enable `tools.subagent.codex.enabled` on a gateway with an installed, authenticated Codex CLI. Set `executable` if the gateway cannot find `codex` on its PATH. Optional `model` and `effort` set the default for new tasks. The runner uses a workspace-write sandbox and sends eligible approval requests to Codex auto-review. Sandboxed commands have network access by default. Set `networkAccess` to `false` to disable network access inside the sandbox. This configuration applies to Codex tasks across conversation surfaces.
+
+In the WebUI, use **Settings → Models → Codex subagent model** to set `tools.subagent.codex.model`. Enter a model ID supported by the gateway's Codex CLI. A blank value uses the CLI's default for new threads. Tasks that continue an existing Codex thread keep the thread's saved model.
 
 When enabled, the agent can choose Codex as the backend for a task or follow-up in a persistent conversation. You can also request Codex directly with `/codex <task>`. The original chat receives one receipt with a task reference, followed by any questions and the terminal result. Ask for progress, give a follow-up, answer a question, or stop one task by naming it or its reference. In Feishu, Telegram, and Discord, quoting the receipt identifies the task and quoting a question identifies the pending question. A question releases the execution slot. The next answer starts a turn on the same Codex thread.
 

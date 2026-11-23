@@ -208,6 +208,8 @@ _WEBUI_MUTATION_PATHS = {
     "settings.model_configuration.delete": "/api/settings/model-configurations/delete",
     "settings.model_configuration.migrate": "/api/settings/model-configurations/migrate",
     "settings.model_call_order.update": "/api/settings/model-call-order/update",
+    "settings.native_review_model.update": "/api/settings/native-review-model/update",
+    "settings.subagent_models.update": "/api/settings/subagent-models/update",
     "settings.provider.update": "/api/settings/provider/update",
     "settings.provider.create": "/api/settings/provider/create",
     "settings.provider.oauth_login": "/api/settings/provider/oauth-login",

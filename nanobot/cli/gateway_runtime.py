@@ -55,6 +55,7 @@ from nanobot.webui.dev import WebUIDevError, WebUIDevServer
 from nanobot.webui.sidebar_state import ensure_webui_session_archives
 
 if TYPE_CHECKING:
+    from nanobot.agent.tools.subagent_config import SubagentToolConfig
     from nanobot.update_profiles import ProfileReceipt
     from nanobot.update_restart import GatewayStartup
 
@@ -464,6 +465,7 @@ def _run_claimed_gateway(
     from nanobot.agent.turn_delivery import TurnDeliveryFactory
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
+    from nanobot.config.loader import load_config, resolve_config_env_vars
     from nanobot.config.watcher import watch_config_file
     from nanobot.cron.bound_runner import run_bound_cron_job
     from nanobot.cron.service import CronJobSkippedError, CronService
@@ -553,6 +555,10 @@ def _run_claimed_gateway(
 
     config_path = str(gateway_instance.config_path)
 
+    def _load_subagent_config() -> "SubagentToolConfig":
+        path = gateway_instance.config_path
+        return resolve_config_env_vars(load_config(path).tools.subagent, config_path=path)
+
     # Preserve existing single-workspace installs, but keep custom workspaces clean.
     if is_default_workspace(config.workspace_path):
         _migrate_cron_store(config)
@@ -588,6 +594,7 @@ def _run_claimed_gateway(
         session_manager=session_manager,
         provider_snapshot_loader=_load_gateway_provider_snapshot,
         preset_catalog_loader=load_model_preset_catalog,
+        subagent_config_loader=_load_subagent_config,
         turn_delivery_factory=turn_delivery_factory,
         provider_signature=provider_snapshot.signature,
         local_trigger_store=trigger_store,

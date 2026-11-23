@@ -5,18 +5,28 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
-from nanobot.agent.memory import Consolidator
-from nanobot.agent.subagent import SubagentManager
+from nanobot.agent.loop import AgentLoop
+from nanobot.agent.model_presets import build_static_preset_snapshot
 from nanobot.agent.tools.context import RequestContext, request_context
+from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.subagent import SubagentTool
-from nanobot.agent.tools.subagent_config import SubagentProjectConfig, SubagentToolConfig
+from nanobot.agent.tools.subagent_config import (
+    NativeReviewConfig,
+    SubagentProjectConfig,
+    SubagentToolConfig,
+)
 from nanobot.bus.queue import MessageBus
-from nanobot.config.schema import ToolsConfig
+from nanobot.config.schema import (
+    AgentDefaults,
+    AgentsConfig,
+    Config,
+    ModelPresetConfig,
+    ToolsConfig,
+)
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.session.manager import SessionManager
 from nanobot.utils.llm_runtime import LLMRuntime
@@ -60,9 +70,11 @@ def project(tmp_path):
 class _ReviewScenario(LLMProvider):
     """Script model decisions, and base review verdicts on actual tool evidence."""
 
-    def __init__(self, rework_succeeds):
+    def __init__(self, rework_succeeds, review_model, execution_model):
         super().__init__(provider_name="offline-test")
         self.rework_succeeds = rework_succeeds
+        self.review_model = review_model
+        self.execution_model = execution_model
         self.reviews = []
         self.first_green = False
         self.before_pass = None
@@ -76,6 +88,7 @@ class _ReviewScenario(LLMProvider):
         names = {schema["function"]["name"] for schema in tools or []}
         last = messages[-1]
         if names == {"read_review_file"}:
+            assert kwargs["model"] == self.review_model
             evidence = json.loads(messages[1]["content"])
             assert evidence["task"] == _TASK
             assert any(record["command"] == _COMMAND and record["exit_code"] == 0
@@ -100,6 +113,7 @@ class _ReviewScenario(LLMProvider):
                               "trigger": '" ABC " still has spaces', "change": "Strip spaces and add a regression test."}],
             }))
 
+        assert kwargs["model"] == self.execution_model
         if last["role"] == "user":
             is_rework = "internal review feedback" in last["content"]
             if is_rework:
@@ -127,24 +141,41 @@ class _ReviewScenario(LLMProvider):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("rework_succeeds", "during_review"), [
-    (True, None), (False, None), (True, "change"), (True, "cancel"),
-], ids=["fix-and-re-review", "revision-limit", "changed-candidate", "cancel-review"])
+@pytest.mark.parametrize(("rework_succeeds", "during_review", "review_preset", "native_preset"), [
+    (True, None, None, None), (False, None, None, None), (True, "change", None, None), (True, "cancel", None, None),
+    (True, None, "reviewer", "worker"), (True, None, None, "worker"),
+], ids=["fix-and-re-review", "revision-limit", "changed-candidate", "cancel-review",
+        "dedicated-review-and-native-models", "dedicated-native-model-with-default-review"])
 async def test_native_review_checks_original_trigger_despite_green_tests(
-    tmp_path, project, rework_succeeds, during_review,
+    tmp_path, project, rework_succeeds, during_review, review_preset, native_preset,
 ):
     workspace = tmp_path / "agent"
     workspace.mkdir()
     owner = "cli:review"
     sessions = SessionManager(workspace, sessions_root=tmp_path / "sessions")
     await sessions.state.get(owner)
-    manager = SubagentManager(
-        workspace=workspace, bus=MessageBus(), max_tool_result_chars=16_000,
-        consolidator=MagicMock(spec=Consolidator), session_manager=sessions,
-        tools_config=ToolsConfig(subagent=SubagentToolConfig(projects={"review": project})),
-        max_concurrent_subagents=1, max_iterations=7,
+    review_model = ModelPresetConfig(model="review-model")
+    worker_model = ModelPresetConfig(model="worker-model")
+    provider = _ReviewScenario(
+        rework_succeeds,
+        review_model.model if review_preset else "test-model",
+        worker_model.model if native_preset else "test-model",
     )
-    provider = _ReviewScenario(rework_succeeds)
+    config = Config(
+        agents=AgentsConfig(defaults=AgentDefaults(
+            workspace=str(workspace), model="main-default", max_tool_iterations=7,
+        )),
+        tools=ToolsConfig(subagent=SubagentToolConfig(
+            projects={"review": project}, native_model_preset=native_preset,
+            native_review=NativeReviewConfig(model_preset=review_preset),
+        )),
+        model_presets={"reviewer": review_model, "worker": worker_model},
+    )
+    agent = AgentLoop.from_config(
+        config, MessageBus(), provider=provider, session_manager=sessions, tool_registry=ToolRegistry(),
+        preset_snapshot_loader=lambda name: build_static_preset_snapshot(provider, name, config.model_presets[name]),
+    )
+    manager = agent.subagents
     provider.wait_for_cancel = during_review == "cancel"
     if during_review == "change":
         def change_candidate():
@@ -181,5 +212,4 @@ async def test_native_review_checks_original_trigger_despite_green_tests(
             assert "revision limit" in notice.content
         assert (project.repository / "normalize.py").read_text().endswith("return value\n")
     finally:
-        await manager.close()
-        await sessions.state.aclose()
+        await agent.aclose()

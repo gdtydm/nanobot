@@ -721,6 +721,11 @@ export interface ProviderOAuthAuthorizationRequired {
   user_code?: string;
 }
 
+export interface AntigravityOAuthClientInput {
+  client_id: string;
+  client_secret: string;
+}
+
 export interface ProviderOAuthPending {
   status: "pending";
   provider: string;
@@ -786,6 +791,9 @@ export interface SettingsPayload {
   }>;
   model_call_order: string[];
   model_call_order_editable: boolean;
+  native_review_model_preset?: string | null;
+  native_subagent_model_preset?: string | null;
+  codex_subagent_model?: string | null;
   /** Whether an actual legacy model configuration is available to convert. */
   model_configuration_migratable?: boolean;
   /** Host can resolve the default request API for an unsaved model configuration. */
@@ -816,6 +824,7 @@ export interface SettingsPayload {
     oauth_expires_at?: number | null;
     oauth_login_supported?: boolean;
     oauth_logout_supported?: boolean;
+    oauth_client_setup_required?: boolean;
     use_proxy?: boolean;
     advanced_fields?: Array<
       | "extra_headers"

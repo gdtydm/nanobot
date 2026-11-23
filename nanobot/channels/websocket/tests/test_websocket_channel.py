@@ -4879,6 +4879,71 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
 
 
 @pytest.mark.asyncio
+async def test_subagent_model_settings_persist_independently(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    config = Config(
+        model_presets={"reviewer": ModelPresetConfig(model="openai/gpt-4.1-mini", provider="openai")},
+    )
+    config.agents.defaults.model = "openai/gpt-4o"
+    config.providers.openai.api_key = "test-key"
+    save_config(config, config_path)
+    monkeypatch.setattr("nanobot.config.loader._current_config_path", config_path)
+    gateway = _basic_handler(MessageBus())
+    connection = SimpleNamespace()
+
+    async def mutate(action, settings, *, status=200):
+        response = await gateway.http.dispatch_webui_mutation(connection, action, settings)
+        assert response.status_code == status
+        return json.loads(response.body) if status == 200 else None
+
+    try:
+        review_action = "settings.native_review_model.update"
+        task_action = "settings.subagent_models.update"
+        payload = await mutate(review_action, {"model_preset": "reviewer"})
+        assert payload["native_review_model_preset"] == "reviewer"
+        assert payload["agent"]["model"] == "openai/gpt-4o"
+        assert payload["model_call_order"] == []
+        assert payload["requires_restart"] is False
+        assert load_config(config_path).tools.subagent.native_review.model_preset == "reviewer"
+
+        native = await mutate(task_action, {"native_model_preset": "reviewer"})
+        assert native["native_subagent_model_preset"] == "reviewer"
+        assert native["codex_subagent_model"] is None
+        assert native["requires_restart"] is False
+        codex = await mutate(task_action, {"codex_model": "cli-model"})
+        assert codex["native_subagent_model_preset"] == "reviewer"
+        assert codex["native_review_model_preset"] == "reviewer"
+        assert codex["codex_subagent_model"] == "cli-model"
+        saved = load_config(config_path).tools.subagent
+        assert (saved.native_model_preset, saved.codex.model) == ("reviewer", "cli-model")
+
+        await mutate(review_action, {"model_preset": "missing"}, status=400)
+        await mutate(task_action, {"native_model_preset": "missing", "codex_model": "other"}, status=400)
+        saved = load_config(config_path).tools.subagent
+        assert (saved.native_review.model_preset, saved.native_model_preset, saved.codex.model) == (
+            "reviewer", "reviewer", "cli-model",
+        )
+
+        renamed = await mutate("settings.model_configuration.update", {"name": "reviewer", "new_name": "quality"})
+        assert renamed["native_review_model_preset"] == "quality"
+        assert renamed["native_subagent_model_preset"] == "quality"
+        cleared = await mutate(review_action, {"model_preset": None})
+        assert cleared["native_review_model_preset"] is None
+
+        await mutate(review_action, {"model_preset": "quality"})
+        deleted = await mutate("settings.model_configuration.delete", {"name": "quality"})
+        assert deleted["native_review_model_preset"] is None
+        assert deleted["native_subagent_model_preset"] is None
+        assert deleted["codex_subagent_model"] == "cli-model"
+        assert load_config(config_path).tools.subagent.native_review.model_preset is None
+        reset = await mutate(task_action, {"codex_model": None})
+        assert reset["codex_subagent_model"] is None
+        assert load_config(config_path).tools.subagent.codex.model is None
+    finally:
+        await gateway.http.settings_routes.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider_name", ["openrouter", "SenseNova"])
 async def test_image_settings_hot_reload_without_restart(
     monkeypatch: pytest.MonkeyPatch,

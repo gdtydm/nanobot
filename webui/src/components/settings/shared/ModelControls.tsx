@@ -466,7 +466,7 @@ export function ModelIdPicker({
                 </p> : null}
               </div>
               {catalogNeedsSignIn && onProviderOAuthLogin
-                && providerRow?.oauth_login_supported ? (
+                && providerRow?.oauth_login_supported && !providerRow.oauth_client_setup_required ? (
                 <Button
                   ref={catalogSignInRef}
                   type="button"

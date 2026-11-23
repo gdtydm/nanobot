@@ -60,6 +60,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import type {
+  AntigravityOAuthClientInput,
   NanobotFeaturesPayload,
   ModelAPIConfig,
   ProviderOAuthAuthorizationRequired,
@@ -162,6 +163,67 @@ function updateProviderRequestOption(
       ? { api: { supported_apis: ["responses"], preferred_api: "responses" } satisfies ModelAPIConfig }
       : {}),
   };
+}
+
+export function AntigravityOAuthClientDialog({
+  saving,
+  error,
+  onSignIn,
+  onClose,
+}: {
+  saving: boolean;
+  error: string | null;
+  onSignIn: (oauthClient: AntigravityOAuthClientInput) => void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const id = useId();
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open && !saving) onClose(); }}>
+      <DialogContent className="w-[min(calc(100vw-2rem),28rem)]">
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!saving && clientId.trim()) {
+              onSignIn({ client_id: clientId.trim(), client_secret: clientSecret.trim() });
+            }
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Antigravity</DialogTitle>
+            <DialogDescription>{t("settings.oauth.antigravityClientHelp")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label htmlFor={`${id}-client-id`} className="block text-xs font-medium">
+              {t("settings.oauth.clientId")}
+            </label>
+            <Input id={`${id}-client-id`} value={clientId} disabled={saving} spellCheck={false} autoComplete="off"
+              onChange={(event) => setClientId(event.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor={`${id}-client-secret`} className="block text-xs font-medium">
+              {t("settings.oauth.clientSecretOptional")}
+            </label>
+            <Input id={`${id}-client-secret`} type="password" value={clientSecret} disabled={saving} autoComplete="off"
+              onChange={(event) => setClientSecret(event.target.value)} />
+          </div>
+          {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
+          <DialogFooter>
+            <Button type="button" variant="ghost" disabled={saving} onClick={onClose}>
+              {t("settings.actions.cancel")}
+            </Button>
+            <Button type="submit" disabled={saving || !clientId.trim()}>
+              {saving ? t("settings.oauth.signingIn") : t("settings.oauth.signIn")}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 export function ProviderOAuthLoginDialog({
@@ -558,6 +620,7 @@ export function ProvidersSettings({
   providerOperation,
   onProviderOAuthLogin,
   onProviderOAuthLogout,
+  onConfigureAntigravityClient,
 }: {
   entry: ProviderSettingsEntry;
   onConfigureProxy?: () => void;
@@ -583,6 +646,7 @@ export function ProvidersSettings({
   providerOperation?: ProviderOperation | null;
   onProviderOAuthLogin: (provider: string) => void;
   onProviderOAuthLogout: (provider: string) => void;
+  onConfigureAntigravityClient?: () => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
@@ -759,8 +823,11 @@ export function ProvidersSettings({
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => onProviderOAuthLogin(provider.name)}
-                      disabled={saving || oauthSettingsDirty || !provider.oauth_login_supported}
+                      onClick={provider.oauth_client_setup_required
+                        ? onConfigureAntigravityClient
+                        : () => onProviderOAuthLogin(provider.name)}
+                      disabled={saving || oauthSettingsDirty || !provider.oauth_login_supported
+                        || (provider.oauth_client_setup_required && !onConfigureAntigravityClient)}
                       title={
                         oauthSettingsDirty
                           ? tx(
@@ -776,9 +843,11 @@ export function ProvidersSettings({
                       ) : null}
                       {oauthActionBusy
                         ? tx("settings.oauth.signingIn", "Signing in...")
-                        : oauthAuthenticated
-                          ? tx("settings.oauth.signInAgain", "Sign in again")
-                          : tx("settings.oauth.signIn", "Sign in")}
+                        : provider.oauth_client_setup_required
+                          ? t("settings.oauth.configureClient")
+                          : oauthAuthenticated
+                            ? tx("settings.oauth.signInAgain", "Sign in again")
+                            : tx("settings.oauth.signIn", "Sign in")}
                     </Button>
                   </div>
                 </div>

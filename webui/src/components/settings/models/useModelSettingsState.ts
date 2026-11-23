@@ -22,6 +22,7 @@ export function useModelSettingsState(initialSettings: SettingsPayload | null) {
   const [modelPresetNameError, setModelPresetNameError] = useState<string | null>(null);
   const [modelConfigurationSaving, setModelConfigurationSaving] = useState(false);
   const [modelCallOrderSaving, setModelCallOrderSaving] = useState(false);
+  const [taskModelSaving, setTaskModelSaving] = useState(false);
   const [modelMigrationSaving, setModelMigrationSaving] = useState(false);
   const [modelPresetPendingDelete, setModelPresetPendingDelete] =
     useState<SettingsPayload["model_presets"][number] | null>(null);
@@ -34,6 +35,7 @@ export function useModelSettingsState(initialSettings: SettingsPayload | null) {
   const [providerOAuthResponse, setProviderOAuthResponse] = useState("");
   const [providerOAuthCompleting, setProviderOAuthCompleting] = useState(false);
   const [providerOAuthDialogError, setProviderOAuthDialogError] = useState<string | null>(null);
+  const [antigravityClientSetup, setAntigravityClientSetup] = useState(false);
   const [providerForms, setProviderForms] = useState<Record<string, ProviderForm>>({});
   const [visibleProviderKeys, setVisibleProviderKeys] = useState<Record<string, boolean>>({});
   const [editingProviderKeys, setEditingProviderKeys] = useState<Record<string, boolean>>({});
@@ -46,10 +48,13 @@ export function useModelSettingsState(initialSettings: SettingsPayload | null) {
   );
 
   return {
+    antigravityClientSetup,
     editingProviderKeys,
     form,
     modelCallOrder,
     modelCallOrderSaving,
+    taskModelSaving,
+    setTaskModelSaving,
     modelConfigurationSaving,
     modelMigrationSaving,
     modelPresetBeforeCreateRef,
@@ -66,6 +71,7 @@ export function useModelSettingsState(initialSettings: SettingsPayload | null) {
     providerSaving,
     providerOperation,
     saving,
+    setAntigravityClientSetup,
     setEditingProviderKeys,
     setForm,
     setModelCallOrder,

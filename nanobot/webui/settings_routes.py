@@ -50,9 +50,11 @@ from nanobot.webui.settings_api import (
     update_image_generation_settings,
     update_model_call_order,
     update_model_configuration,
+    update_native_review_model,
     update_network_safety_settings,
     update_provider_settings,
     update_runtime_config_settings,
+    update_subagent_models,
     update_transcription_settings,
     update_web_search_settings,
 )
@@ -109,6 +111,8 @@ _MODEL_ROUTES = {
     "/api/settings/model-configurations/delete": "model-delete",
     "/api/settings/model-configurations/migrate": "models-migrate",
     "/api/settings/model-call-order/update": "call-order-update",
+    "/api/settings/native-review-model/update": "native-review-model-update",
+    "/api/settings/subagent-models/update": "subagent-models-update",
     "/api/settings/provider/update": "provider-update",
     "/api/settings/provider/create": "provider-create",
     "/api/settings/provider-models": "provider-models",
@@ -172,6 +176,8 @@ _SETTINGS_MUTATION_PATHS = frozenset({
     "/api/settings/model-configurations/delete",
     "/api/settings/model-configurations/migrate",
     "/api/settings/model-call-order/update",
+    "/api/settings/native-review-model/update",
+    "/api/settings/subagent-models/update",
     "/api/settings/provider/update",
     "/api/settings/provider/create",
     "/api/settings/provider/oauth-login",
@@ -220,7 +226,7 @@ def _payload_query(payload: dict[str, Any]) -> QueryParams:
         key: [_query_value(value)]
         for key, value in payload.items()
         if key
-        and key not in {"authorization_response", "channel", "values"}
+        and key not in {"authorization_response", "channel", "oauth_client", "values"}
     }
 
 
@@ -511,6 +517,8 @@ class WebUISettingsRouter:
             delete_model=delete_model_configuration,
             migrate_models=migrate_model_configurations,
             update_call_order=update_model_call_order,
+            update_native_review_model=update_native_review_model,
+            update_subagent_models=update_subagent_models,
             update_provider=update_provider_settings,
             create_provider=create_provider_settings,
             provider_models=provider_models_payload,

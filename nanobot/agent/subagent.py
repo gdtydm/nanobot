@@ -58,7 +58,7 @@ from nanobot.agent.tools.file_state import FileStates
 from nanobot.agent.tools.loader import ToolLoader
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.schema import StringSchema, tool_parameters_schema
-from nanobot.agent.tools.subagent_config import SubagentProjectConfig
+from nanobot.agent.tools.subagent_config import SubagentProjectConfig, SubagentToolConfig
 from nanobot.agent.turn_hooks import AgentTurnHookSpec, build_agent_turn_hook
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
@@ -132,6 +132,7 @@ class _SubagentTask:
     session: Session
     runtime: LLMRuntime | None
     origin: _SubagentOrigin
+    parent_runtime: LLMRuntime | None = None
     origin_message_id: str | None = None
     workspace_scope: WorkspaceScope | None = None
     project_config: SubagentProjectConfig | None = None
@@ -351,6 +352,8 @@ class SubagentManager:
         consolidator: Consolidator,
         network_config: NetworkConfig | None = None,
         session_manager: SessionManager | None = None,
+        resolve_model_preset: Callable[[str], LLMRuntime] | None = None,
+        subagent_config_loader: Callable[[], SubagentToolConfig] | None = None,
     ):
         if cast(object, consolidator) is None:
             raise TypeError("SubagentManager requires a consolidator")
@@ -382,6 +385,8 @@ class SubagentManager:
         self.workspace = workspace
         self.bus = bus
         self.tools_config = tools_config or ToolsConfig()
+        self._resolve_model_preset = resolve_model_preset
+        self._subagent_config_loader = subagent_config_loader
         self.network_config = network_config or NetworkConfig()
         self.max_tool_result_chars = max_tool_result_chars
         self.restrict_to_workspace = restrict_to_workspace
@@ -766,6 +771,18 @@ class SubagentManager:
         ToolLoader().load(ctx, registry, scope="subagent")
         return registry
 
+    def _load_model_settings(self) -> SubagentToolConfig:
+        if self._subagent_config_loader is None:
+            return self.tools_config.subagent
+        return self._subagent_config_loader()
+
+    def _preset_runtime(self, name: str | None, default: LLMRuntime) -> LLMRuntime:
+        if name is None:
+            return default
+        if self._resolve_model_preset is None:
+            raise SubagentControlError("Model presets are unavailable in this subagent runtime")
+        return self._resolve_model_preset(name)
+
     async def _create_task(
         self, task: str, label: str | None, origin_channel: str, origin_chat_id: str,
         session_key: str | None, origin_message_id: str | None,
@@ -781,8 +798,15 @@ class SubagentManager:
         kind: SubagentKind | None = None,
     ) -> _SubagentTask:
         self.bus.admission.check()
-        if runtime is None and backend == "native":
-            runtime = self._compat_spawn_runtime()
+        parent_runtime = None
+        if backend == "native":
+            parent_runtime = runtime or self._compat_spawn_runtime()
+            try:
+                runtime = self._preset_runtime(self._load_model_settings().native_model_preset, parent_runtime)
+            except (KeyError, ValueError) as exc:
+                raise SubagentControlError(f"Could not load the native subagent model: {exc}") from exc
+            if runtime is parent_runtime:
+                parent_runtime = None
         if temperature is not None and runtime is not None:
             runtime = runtime.with_generation_overrides(temperature=temperature)
         owner = session_key or f"{origin_channel}:{origin_chat_id}"
@@ -829,6 +853,12 @@ class SubagentManager:
         project_config = None
         worktree_id = previous.worktree_id if previous else None
         codex_thread = previous.codex_thread if previous and backend == "codex" else None
+        codex_config = None
+        if backend == "codex" and codex_thread is None:
+            try:
+                codex_config = self._load_model_settings().codex
+            except ValueError as exc:
+                raise SubagentControlError(f"Could not load the Codex task model: {exc}") from exc
         if base_ref is not None and previous is not None:
             raise SubagentControlError("base_ref applies only to new worktrees")
         if adopt_branch is not None and (not adopt_branch.strip() or worktree_id is None):
@@ -884,12 +914,12 @@ class SubagentManager:
             codex_thread=codex_thread,
         )
         if backend == "codex":
-            config = self.tools_config.subagent.codex
             if previous is not None and codex_thread is not None:
                 status.cwd, status.model, status.effort = previous.cwd, previous.model, previous.effort
             else:
                 status.cwd = str((workspace_scope.project_path if workspace_scope else self.workspace).resolve())
-                status.model, status.effort = config.model, config.effort
+                assert codex_config is not None
+                status.model, status.effort = codex_config.model, codex_config.effort
         self._admitting += 1
         try:
             if self.sessions is not None:
@@ -918,6 +948,7 @@ class SubagentManager:
             status=status,
             session=child,
             runtime=runtime,
+            parent_runtime=parent_runtime,
             origin={
                 "channel": origin_channel, "chat_id": origin_chat_id,
                 "session_key": owner, "sender_id": sender_id,
@@ -1539,6 +1570,8 @@ class SubagentManager:
             return await self._run_admitted_subagent(record)
 
         review_round = 0
+        review_runtime = record.parent_runtime or record.runtime
+        assert review_runtime is not None
         candidate_id = None
         outcome = None
         try:
@@ -1568,8 +1601,15 @@ class SubagentManager:
                     status.phase = "reviewing"
                     await self._save_status(status)
                     record.raise_if_stopping()
+                    if review_round == 0:
+                        try:
+                            review_runtime = self._preset_runtime(
+                                self._load_model_settings().native_review.model_preset, review_runtime,
+                            )
+                        except (KeyError, ValueError) as exc:
+                            raise ReviewUnavailableError(f"Could not load the review model: {exc}") from exc
                     review_round += 1
-                    verdict, usage = await self._review_native_candidate(record, worktree, review_input(
+                    verdict, usage = await self._review_native_candidate(record, worktree, review_runtime, review_input(
                         status.task_description,
                         [message["content"] for message in record.session.messages
                          if message.get("role") == "user" and HIDDEN_HISTORY_META not in message
@@ -1612,10 +1652,8 @@ class SubagentManager:
         return left + right if left is not None and right is not None else left or right
 
     async def _review_native_candidate(
-        self, record: _SubagentTask, worktree: ReviewWorktree, evidence: str,
+        self, record: _SubagentTask, worktree: ReviewWorktree, runtime: LLMRuntime, evidence: str,
     ) -> tuple[ReviewVerdict, LLMUsage | None]:
-        runtime = record.runtime
-        assert runtime is not None
         tools = ToolRegistry()
         tools.register(ReviewReadTool(worktree.root))
         definitions = tools.get_definitions()

@@ -19,6 +19,7 @@ import {
   ModelsSettings,
 } from "@/components/settings/models/ModelsSettings";
 import {
+  AntigravityOAuthClientDialog,
   ProviderOAuthLoginDialog,
   ProvidersSettings,
   type ProviderSettingsEntry,
@@ -298,6 +299,11 @@ export function SettingsPage({
               showBrandLogos={localPrefs.brandLogos}
               providerSaving={modelState.providerOperation?.action === "login" ? modelState.providerSaving : null}
               onChangeCallOrder={modelActions.changeModelCallOrder}
+              taskModelSaving={modelState.taskModelSaving}
+              onChangeReviewModel={webuiCapabilities.includes("webui.native-review-model.v1")
+                ? modelActions.changeReviewModel : undefined}
+              onChangeSubagentModels={webuiCapabilities.includes("webui.subagent-models.v1")
+                ? modelActions.changeSubagentModels : undefined}
               onProviderOAuthLogin={(provider) => modelActions.runProviderOAuth(provider, "login")}
               onAddProvider={(trigger, onAdded) => {
                 providerSetupOrigin.current = { trigger, onAdded };
@@ -372,6 +378,10 @@ export function SettingsPage({
               providerOperation={modelState.providerOperation}
               onProviderOAuthLogin={(provider) => modelActions.runProviderOAuth(provider, "login")}
               onProviderOAuthLogout={(provider) => modelActions.runProviderOAuth(provider, "logout")}
+              onConfigureAntigravityClient={() => {
+                modelState.setProviderOAuthDialogError(null);
+                modelState.setAntigravityClientSetup(true);
+              }}
             /> : null}
           </div>
         );
@@ -668,6 +678,18 @@ export function SettingsPage({
           }
         }}
       />
+
+      {modelState.antigravityClientSetup ? (
+        <AntigravityOAuthClientDialog
+          saving={modelState.providerSaving === "antigravity"}
+          error={modelState.providerOAuthDialogError}
+          onSignIn={(oauthClient) => modelActions.runProviderOAuth("antigravity", "login", oauthClient)}
+          onClose={() => {
+            modelState.setAntigravityClientSetup(false);
+            modelState.setProviderOAuthDialogError(null);
+          }}
+        />
+      ) : null}
 
       <ProviderOAuthLoginDialog
         flow={providerOAuthFlow}

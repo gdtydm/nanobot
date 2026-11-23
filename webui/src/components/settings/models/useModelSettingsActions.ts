@@ -29,10 +29,14 @@ import {
   migrateModelConfigurations,
   updateModelCallOrder,
   updateModelConfiguration,
+  updateNativeReviewModel,
   updateProviderSettings,
+  updateSubagentModels,
+  type SubagentModelUpdate,
 } from "@/lib/api";
 import type { NanobotClient } from "@/lib/nanobot-client";
 import type {
+  AntigravityOAuthClientInput,
   ProviderOAuthAuthorizationRequired,
   ProviderOAuthCompletionResult,
   ProviderOAuthLoginResult,
@@ -106,7 +110,9 @@ export function useModelSettingsActions({
     providerOAuthFlowRef,
     providerOAuthResponse,
     providerSaving,
+    taskModelSaving,
     saving,
+    setAntigravityClientSetup,
     setEditingProviderKeys,
     setForm,
     setModelCallOrder,
@@ -123,6 +129,7 @@ export function useModelSettingsActions({
     setProviderOAuthFlow,
     setProviderOAuthResponse,
     setProviderOperation,
+    setTaskModelSaving,
     setSaving,
     setVisibleProviderKeys,
     visibleProviderKeys,
@@ -364,6 +371,30 @@ export function useModelSettingsActions({
     modelPresetBeforeCreateRef.current = null;
   };
 
+  const saveTaskModel = async (save: () => Promise<SettingsPayload>) => {
+    if (!settings || taskModelSaving) return false;
+    setTaskModelSaving(true);
+    try {
+      const payload = await save();
+      applyPayload(payload, { preserveAgentForm: true, preserveCapabilityForms: true });
+      setError(null);
+      return true;
+    } catch (err) {
+      setError((err as Error).message);
+      return false;
+    } finally {
+      setTaskModelSaving(false);
+    }
+  };
+
+  const changeReviewModel = (preset: string | null) => {
+    if (settings?.native_review_model_preset === preset) return;
+    return saveTaskModel(() => updateNativeReviewModel(client, preset));
+  };
+
+  const changeSubagentModels = (update: SubagentModelUpdate) =>
+    saveTaskModel(() => updateSubagentModels(client, update));
+
   const changeModelCallOrder = async (nextOrder: string[]) => {
     const unchanged =
       nextOrder.length === modelCallOrder.length &&
@@ -521,13 +552,17 @@ export function useModelSettingsActions({
     }
   };
 
-  const runProviderOAuth = async (providerName: string, action: "login" | "logout") => {
+  const runProviderOAuth = async (
+    providerName: string,
+    action: "login" | "logout",
+    oauthClient?: AntigravityOAuthClientInput,
+  ) => {
     if (providerSaving) return;
-    const usesCLIProxyAPI = providerName === "cliproxyapi";
+    const opensGoogle = providerName === "antigravity" || providerName === "cliproxyapi";
     let popup: Window | null = null;
     if (
       action === "login"
-      && (usesCLIProxyAPI || (!remoteBrowserAccess && (providerName === "xai_grok" || providerName === "antigravity")))
+      && (opensGoogle || (providerName === "xai_grok" && !remoteBrowserAccess))
     ) {
       try {
         popup = window.open("about:blank", "_blank");
@@ -543,11 +578,12 @@ export function useModelSettingsActions({
           ? await loginProviderOAuth(
               client,
               providerName,
-              (providerName === "openai_codex" || providerName === "antigravity" || usesCLIProxyAPI) && remoteBrowserAccess,
+              (providerName === "openai_codex" || opensGoogle) && remoteBrowserAccess,
+              oauthClient,
             )
           : await logoutProviderOAuth(client, providerName);
       if (isProviderOAuthAuthorizationRequired(payload)) {
-        if ((payload.completion_input === "device_code" || usesCLIProxyAPI) && !oauthMounted.current) {
+        if ((payload.completion_input === "device_code" || opensGoogle) && !oauthMounted.current) {
           popup?.close();
           await cancelProviderOAuth(client, payload.provider, payload.flow_id).catch(() => {});
           return;
@@ -558,6 +594,7 @@ export function useModelSettingsActions({
           // The dialog keeps the authorization link available when the popup was closed.
         }
         providerOAuthFlowRef.current = payload;
+        setAntigravityClientSetup(false);
         setProviderOAuthFlow(payload);
         setProviderOAuthResponse("");
         setProviderOAuthDialogError(null);
@@ -570,7 +607,11 @@ export function useModelSettingsActions({
       setError(null);
     } catch (err) {
       popup?.close();
-      setError((err as Error).message);
+      if (oauthClient) {
+        setProviderOAuthDialogError((err as Error).message);
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setProviderOperation(null);
     }
@@ -643,6 +684,8 @@ export function useModelSettingsActions({
     beginModelPresetCreation,
     cancelModelPresetCreation,
     changeModelCallOrder,
+    changeReviewModel,
+    changeSubagentModels,
     completeProviderOAuthResponse,
     createCustomProvider,
     handleDeleteModelConfiguration,

@@ -38,7 +38,10 @@ def test_antigravity_webui_login_pasted_callback_and_logout(tmp_path, monkeypatc
     def handler(request):
         if request.url.path == "/token":
             form = parse_qs(request.content.decode())
-            assert form["client_id"] == ["test-client"] and "client_secret" not in form
+            assert form["client_id"] == ["test-client"]
+            assert form["client_secret"] == ["test-client-secret"]
+            if form["grant_type"] == ["refresh_token"]:
+                return httpx.Response(200, json={"access_token": "new-access", "expires_in": 3600})
             return httpx.Response(200, json={"access_token": "secret", "refresh_token": "refresh", "expires_in": 3600})
         if request.url.path.endswith("userinfo"):
             return httpx.Response(200, json={"email": "test@example.com"})
@@ -61,22 +64,33 @@ def test_antigravity_webui_login_pasted_callback_and_logout(tmp_path, monkeypatc
         with pytest.raises(WebUISettingsError, match="NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_ID") as error:
             login_oauth_provider(config, login_query, oauth_flows=registry, config_path=None)
         assert error.value.status == 400
-        monkeypatch.setenv("NANOBOT_ANTIGRAVITY_OAUTH_CLIENT_ID", "test-client")
-        started = login_oauth_provider(config, login_query, oauth_flows=registry, config_path=None)
+        assert oauth_provider_status(spec)["client_setup_required"] is True
+        started = login_oauth_provider(
+            config, login_query, oauth_flows=registry, config_path=None,
+            oauth_client={"client_id": "test-client", "client_secret": "test-client-secret"},
+        )
         assert started["completion_input"] == "callback_url"
+        assert not path.exists()
         query = {"provider": ["antigravity"], "flow_id": [started["flow_id"]]}
         with pytest.raises(WebUISettingsError, match="complete callback URL"):
             complete_oauth_provider(query, "only-a-code", oauth_flows=registry, config_path=None, settings_payload=lambda **_: {})
         assert registry.get("antigravity", started["flow_id"]) is not None
         auth = parse_qs(urlsplit(started["authorization_url"]).query)
+        assert auth["client_id"] == ["test-client"] and "client_secret" not in auth
         callback = auth["redirect_uri"][0] + "?" + urlencode({"code": "test-code", "state": auth["state"][0]})
         result = complete_oauth_provider(query, callback, oauth_flows=registry, config_path=None,
             settings_payload=lambda **_: oauth_provider_status(spec))
         assert result["configured"] and result["account"] == "test@example.com"
+        assert result["client_setup_required"] is False
+        assert "test-client" not in str(result)
         assert seen_proxy == ["http://127.0.0.1:7890"]
+        refreshed = oauth.get_antigravity_token(force_refresh=True)
+        assert refreshed.access == "new-access" and refreshed.refresh == "refresh"
+        assert oauth.get_antigravity_login_status(path) == refreshed
         signed_out = logout_oauth_provider({"provider": ["antigravity"]}, oauth_flows=registry, config_path=None,
             settings_payload=lambda **_: oauth_provider_status(spec))
         assert signed_out["configured"] is False
+        assert not path.exists()
     finally:
         registry.close()
 
@@ -311,6 +325,9 @@ def test_model_domain_owns_dto_and_config_updates() -> None:
         "model_presets",
         "model_call_order",
         "model_call_order_editable",
+        "native_review_model_preset",
+        "native_subagent_model_preset",
+        "codex_subagent_model",
         "model_configuration_migratable",
         "model_api_resolution_supported",
         "provider_api_configuration_supported",

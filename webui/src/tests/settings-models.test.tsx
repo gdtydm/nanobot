@@ -123,6 +123,99 @@ async function openPresetAdvancedOptions() {
 describe("Settings models", () => {
   installSettingsViewTestHooks();
 
+  it("saves an independent review preset and lets the main agent become the default again", async () => {
+    const { payload } = settingsPayloadWithBackup();
+    const settings = { ...payload, native_review_model_preset: null };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(settings)));
+    requestMutationMock
+      .mockResolvedValueOnce({ ...settings, native_review_model_preset: "backup" })
+      .mockResolvedValueOnce(settings);
+    renderSettingsView({
+      initialSection: "models",
+      webuiCapabilities: ["webui.native-review-model.v1"],
+    });
+
+    const review = await screen.findByRole("combobox", { name: "Review model" });
+    expect(review).toHaveTextContent("Default (main agent)");
+    await openPopover(review);
+    fireEvent.click(await screen.findByRole("option", { name: "backup" }));
+    expect(requestMutationMock).toHaveBeenLastCalledWith(
+      "settings.native_review_model.update", { model_preset: "backup" }, 20_000,
+    );
+    await waitFor(() => expect(review).toHaveTextContent("backup"));
+
+    await openPopover(review);
+    fireEvent.click(await screen.findByRole("option", { name: "Default (main agent)" }));
+    expect(requestMutationMock).toHaveBeenLastCalledWith(
+      "settings.native_review_model.update", { model_preset: null }, 20_000,
+    );
+    await waitFor(() => expect(review).toHaveTextContent("Default (main agent)"));
+  });
+
+  it("keeps the model settings usable on hosts without the review model capability", async () => {
+    const settings = settingsPayload();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(settings)));
+    renderSettingsView({ initialSection: "models" });
+
+    expect(await screen.findByText("Model presets")).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Review model" })).not.toBeInTheDocument();
+  });
+
+  it("sets the native preset and the Codex model independently, including clearing them", async () => {
+    const { payload } = settingsPayloadWithBackup();
+    const settings: SettingsPayload = {
+      ...payload, native_subagent_model_preset: null, codex_subagent_model: null, native_review_model_preset: "primary",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(settings)));
+    requestMutationMock.mockImplementation(async (_action, args) => {
+      if ("native_model_preset" in args) settings.native_subagent_model_preset = args.native_model_preset;
+      if ("codex_model" in args) settings.codex_subagent_model = args.codex_model;
+      return { ...settings };
+    });
+    renderSettingsView({
+      initialSection: "models",
+      webuiCapabilities: ["webui.native-review-model.v1", "webui.subagent-models.v1"],
+    });
+
+    const native = await screen.findByRole("combobox", { name: "Native subagent model" });
+    expect(native).toHaveTextContent("Default (main agent)");
+    await openPopover(native);
+    fireEvent.click(await screen.findByRole("option", { name: "backup" }));
+    expect(requestMutationMock).toHaveBeenLastCalledWith(
+      "settings.subagent_models.update", { native_model_preset: "backup" }, 20_000,
+    );
+    await waitFor(() => expect(native).toHaveTextContent("backup"));
+
+    const codexForm = screen.getByRole("form", { name: "Codex subagent model" });
+    const codex = within(codexForm).getByRole("textbox", { name: "Codex subagent model" });
+    const save = within(codexForm).getByRole("button", { name: "Save" });
+    fireEvent.change(codex, { target: { value: "example-model" } });
+    fireEvent.click(save);
+    expect(requestMutationMock).toHaveBeenLastCalledWith(
+      "settings.subagent_models.update", { codex_model: "example-model" }, 20_000,
+    );
+    await waitFor(() => expect(save).toBeDisabled());
+    await waitFor(() => expect(codex).toBeEnabled());
+    expect(native).toHaveTextContent("backup");
+    expect(screen.getByRole("combobox", { name: "Review model" })).toHaveTextContent("primary");
+
+    fireEvent.change(codex, { target: { value: "" } });
+    fireEvent.click(save);
+    expect(requestMutationMock).toHaveBeenLastCalledWith(
+      "settings.subagent_models.update", { codex_model: null }, 20_000,
+    );
+    await waitFor(() => expect(codex).toBeEnabled());
+    expect(codex).toHaveValue("");
+    expect(codex).toHaveAttribute("placeholder", "Default (Codex CLI)");
+
+    await openPopover(native);
+    fireEvent.click(await screen.findByRole("option", { name: "Default (main agent)" }));
+    expect(requestMutationMock).toHaveBeenLastCalledWith(
+      "settings.subagent_models.update", { native_model_preset: null }, 20_000,
+    );
+    await waitFor(() => expect(native).toHaveTextContent("Default (main agent)"));
+  });
+
   it("saves request overrides in a preset and restores inheritance when cleared", async () => {
     const payload = settingsPayload();
     payload.model_request_overrides_supported = true;

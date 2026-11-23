@@ -21,7 +21,12 @@ async function chooseProviderToConfigure(label: string) {
 describe("Settings providers", () => {
   installSettingsViewTestHooks();
 
-  it.each([false, true])("signs in to Antigravity with a full callback URL (remote: %s)", async (remote) => {
+  it.each([
+    { remote: false, needsClient: true },
+    { remote: true, needsClient: true },
+    { remote: false, needsClient: false },
+    { remote: true, needsClient: false },
+  ])("signs in to Antigravity with a full callback URL ($remote, $needsClient)", async ({ remote, needsClient }) => {
     const happyWindow = window as typeof window & { happyDOM: { setURL: (url: string) => void } };
     const originalUrl = window.location.href;
     happyWindow.happyDOM.setURL(remote ? "http://203.0.113.10:18887/#/settings?section=models" : "http://localhost:18887/#/settings?section=models");
@@ -30,10 +35,14 @@ describe("Settings providers", () => {
       const provider = {
         name: "antigravity", label: "Antigravity", configured: false,
         auth_type: "oauth" as const, api_key_required: false, oauth_login_supported: true,
+        ...(needsClient ? { oauth_client_setup_required: true } : {}),
         adapter_request_apis: ["antigravity_generate_content" as const],
       };
       payload.providers = [provider];
-      const signedIn = { ...payload, providers: [{ ...provider, configured: true, oauth_account: "test@example.com" }] };
+      const signedIn = {
+        ...payload,
+        providers: [{ ...provider, configured: true, oauth_client_setup_required: false, oauth_account: "test@example.com" }],
+      };
       const authorization = {
         status: "authorization_required", provider: "antigravity", flow_id: "flow-antigravity",
         authorization_url: "https://accounts.google.com/o/oauth2/v2/auth?state=test",
@@ -54,13 +63,31 @@ describe("Settings providers", () => {
       vi.stubGlobal("open", open);
       renderProviderManager({ initialSection: "models", initialSettings: payload });
       await chooseProviderToConfigure("Antigravity");
-      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      const oauthClient = { client_id: "test-client", client_secret: "test-client-secret" };
+      if (needsClient) {
+        fireEvent.click(screen.getByRole("button", { name: "Configure OAuth client" }));
+        const setup = within(await screen.findByRole("dialog", { name: "Antigravity" }));
+        expect(setup.getByRole("button", { name: "Sign in" })).toBeDisabled();
+        expect(requestMutationMock).not.toHaveBeenCalled();
+        fireEvent.change(setup.getByLabelText("OAuth client ID"), { target: { value: oauthClient.client_id } });
+        const secret = setup.getByLabelText("OAuth client secret (optional)");
+        expect(secret).toHaveAttribute("type", "password");
+        fireEvent.change(secret, { target: { value: oauthClient.client_secret } });
+        fireEvent.click(setup.getByRole("button", { name: "Sign in" }));
+      } else {
+        fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      }
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledWith("about:blank", "_blank");
       const input = await screen.findByRole("textbox", { name: "Callback URL" });
       expect(requestMutationMock).toHaveBeenCalledWith(
-        "settings.provider.oauth_login", { provider: "antigravity", ...(remote ? { remote_browser: true } : {}) }, 20_000,
+        "settings.provider.oauth_login", {
+          provider: "antigravity",
+          ...(remote ? { remote_browser: true } : {}),
+          ...(needsClient ? { oauth_client: oauthClient } : {}),
+        }, 20_000,
       );
-      expect(open).toHaveBeenCalledTimes(remote ? 0 : 1);
-      if (!remote) expect(popup.location.href).toBe(authorization.authorization_url);
+      expect(popup.location.href).toBe(authorization.authorization_url);
       if (remote) expect(screen.getByText(/^Open the sign-in page in this browser/)).toBeVisible();
       fireEvent.change(input, { target: { value: callback } });
       fireEvent.click(screen.getByRole("button", { name: "Finish sign-in" }));
@@ -122,7 +149,7 @@ describe("Settings providers", () => {
     payload.providers = [
       { name: "openai", label: "OpenAI", configured: true },
       { name: "antigravity", label: "Antigravity", configured: false,
-        auth_type: "oauth", oauth_login_supported: true },
+        auth_type: "oauth", oauth_login_supported: true, oauth_client_setup_required: true },
       { name: "cliproxyapi", label: proxyLabel, configured, auth_type: "oauth", oauth_login_supported: true },
     ];
     renderSettingsView({ initialSection: "models", initialSettings: payload });
