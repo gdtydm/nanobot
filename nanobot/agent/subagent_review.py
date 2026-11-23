@@ -39,7 +39,7 @@ from nanobot.utils.cancellation import shield_and_drain
 
 MAX_REVISIONS = 2
 _MAX_FINDINGS = 5
-_DIFF_LIMIT = 64_000
+_DIFF_LIMIT = 128_000
 _FILE_LIMIT = 12_000
 _MAX_READ_FILE_BYTES = 1_000_000
 _SEARCH_MAX_RESULTS = 50
